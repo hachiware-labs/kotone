@@ -1,0 +1,31 @@
+[project]
+name = "kotone"
+version = "0.1.0"
+description = "A channel-independent data-over-audio reference codec"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.0",
+    "reedsolo>=1.7",
+]
+
+[project.optional-dependencies]
+sbc = [
+    "imageio-ffmpeg>=0.6",
+]
+
+[project.scripts]
+kotone = "kotone.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
