@@ -46,3 +46,22 @@ def test_resume_packets_keep_original_sequence_and_stream() -> None:
     assert packets[0].sequence == 3
     assert not packets[0].flags & FLAG_START
     assert packets[-1].flags & FLAG_END
+
+
+def test_chunked_packets_resume_from_source_offset() -> None:
+    data = bytes(range(256)) * 20
+    encoder = FrameEncoder(payload_size=1_024)
+    packets = list(
+        encoder.packets_from_chunks(
+            (data[index : index + 333] for index in range(3_072, len(data), 333)),
+            total_size=len(data),
+            stream_id=0x12345678,
+            start_sequence=3,
+            source_offset=3_072,
+        )
+    )
+
+    assert packets[0].sequence == 3
+    assert packets[0].payload == data[3_072:4_096]
+    assert b"".join(packet.payload for packet in packets) == data[3_072:]
+    assert packets[-1].flags & FLAG_END

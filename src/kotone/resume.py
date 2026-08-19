@@ -67,25 +67,46 @@ def validate_resume_data(
 ) -> None:
     raw = bytes(data)
     stream_id = zlib.crc32(raw)
+    expected_bytes = min(token.next_sequence * packet_payload_size, len(raw))
+    validate_resume_metadata(
+        token,
+        stream_id=stream_id,
+        total_size=len(raw),
+        packet_payload_size=packet_payload_size,
+        prefix_crc=zlib.crc32(raw[:expected_bytes]),
+    )
+
+
+def validate_resume_metadata(
+    token: ResumeToken,
+    *,
+    stream_id: int,
+    total_size: int,
+    packet_payload_size: int,
+    prefix_crc: int,
+) -> None:
+    if total_size < 0:
+        raise ValueError("total_size must not be negative")
+    if packet_payload_size <= 0:
+        raise ValueError("packet_payload_size must be positive")
     if token.stream_id != stream_id:
         raise ValueError(
             "resume token belongs to a different payload: "
             f"token={token.stream_id:08X}, payload={stream_id:08X}"
         )
-    packet_count = max(1, (len(raw) + packet_payload_size - 1) // packet_payload_size)
+    packet_count = max(1, (total_size + packet_payload_size - 1) // packet_payload_size)
     if token.next_sequence >= packet_count:
         raise ValueError(
             f"resume packet {token.next_sequence} is outside {packet_count} packets"
         )
-    expected_bytes = min(token.next_sequence * packet_payload_size, len(raw))
+    expected_bytes = min(token.next_sequence * packet_payload_size, total_size)
     if token.accepted_bytes != expected_bytes:
         raise ValueError(
             "resume token byte position does not match packet size: "
             f"token={token.accepted_bytes}, expected={expected_bytes}"
         )
-    calculated_crc = zlib.crc32(raw[:expected_bytes])
-    if token.stream_crc != calculated_crc:
+    if token.stream_crc != prefix_crc:
         raise ValueError(
             "resume token prefix CRC does not match the payload: "
-            f"token={token.stream_crc:08X}, payload={calculated_crc:08X}"
+            f"token={token.stream_crc:08X}, payload={prefix_crc:08X}"
         )

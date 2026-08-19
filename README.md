@@ -11,13 +11,14 @@ Kotoneは、任意のバイナリデータをPCM音声へ変換し、音声か�
 - 複数パケットへの分割、Stream ID、Sequence Number
 - パケット単位のCRC32検証と欠落検出
 - 対応受信側が発行したトークンから未受信パケットだけを再送するWAV生成
+- Windowsの既定スピーカーへ直接ストリーミング再生する`kotone send`
 - UTF-8ファイル名、本文サイズ、本文CRC32を持つKTF1 file payload
 - `bytes -> PCM -> bytes` API
 - メモリ使用量を抑えたストリーミングWAV書き込み・読み込み
 - Goodput、raw bitrate、BER、PER、CRC error、lost packet、処理時間の計測
 - SHA-256を含む自動round-trip test
 
-FFmpeg SBC simulationとReed–Solomon FECを実装済みです。Atom LiteのA2DP受信実験では`a2dp-ofdm-441`を第一候補とします。Opus、Windows Audio、WASAPI Loopback、Kotone側からのA2DP直接送信、実音響通信はまだ実装していません。
+FFmpeg SBC simulation、Reed–Solomon FEC、Windows WaveOut送信を実装済みです。Atom LiteのA2DP受信では`a2dp-ofdm-441`を既定値とします。WaveOutへPCMを渡した後のSBC変換とBluetooth A2DP送信はWindowsが担当します。Kotone自身によるBluetoothスタックの直接制御、Opus、WASAPI Loopback、マイク入力を使う汎用的な実音響受信はまだ実装していません。
 
 ## セットアップ
 
@@ -38,7 +39,38 @@ uv sync --extra sbc
 
 ## CLI
 
-encode、noise付与、decodeを独立したコマンドとして実行できます。
+### ファイルを送信する
+
+KotoneをインストールしたWindowsでは、次の1行が通常の送信手順です。
+
+```powershell
+kotone send .\資料.bin
+```
+
+既定では`a2dp-ofdm-441`でKTF1/packet/OFDM PCMを生成し、Windowsで現在選択
+されている既定のスピーカーへ再生します。`Kotone Atom Speaker`を既定の出力先に
+しておけば、そのままWindowsのPCM→SBC→Bluetooth A2DP経路でAtom Liteへ届きます。
+WAVの事前生成、別プロジェクトの再生スクリプト、USB serial接続は必要ありません。
+
+先頭へ500 ms、末尾へ1秒の無音を付け、すべてのWaveOut bufferの再生完了まで待機
+します。Ctrl+Cやエラー時はWaveOutをresetして安全に停止します。入力は複数回走査して
+CRCを計算しますが、ファイル全体、生成PCM全体、WAV全体をRAMへ保持せず、packet単位
+で符号化して少数のWaveOut bufferへqueueします。
+
+出力先やprofileを明示する必要がある場合だけ指定します。`--device`はWaveOutデバイス
+名の一部または数値IDです。
+
+```powershell
+kotone send .\資料.bin --device "Kotone Atom Speaker"
+kotone send .\資料.bin --profile a2dp-ofdm-328-robust
+```
+
+`send`はWindows WaveOut専用です。Windows以外では非対応エラーを表示し、音声出力は
+行いません。
+
+### WAVを生成・解析する
+
+検証やファイル経由の利用では、encode、noise付与、decodeを独立して実行できます。
 
 ```powershell
 uv run kotone encode input.bin clean.wav --profile a2dp-ofdm-328-robust
@@ -59,26 +91,31 @@ uv run kotone decode .\send.wav --profile a2dp-ofdm-441
 ディレクトリへ`資料.bin`として復元します。既に同名ファイルがある場合は上書き
 されるため、必要なら先に別の場所へ移動してください。
 
-Atom Lite受信側がpacket欠落やtimeoutを検出して`RESUME_TOKEN=KTR1-...`を表示
-した場合は、トークンをPCへコピーし、同じ入力ファイルから未受信packetだけを含む
-再開WAVを生成できます。
+`atom-lite-kotone`のPC受信スクリプトがpacket欠落やtimeoutを検出して
+`RESUME_TOKEN=KTR1-...`を表示した場合は、同じ入力ファイルから未受信packetだけを
+含むPCMを直接再送できます。
 
 ```powershell
-uv run kotone encode .\資料.bin .\resume.wav `
-  --profile a2dp-ofdm-441 --resume-token KTR1-...
+kotone send .\資料.bin --resume-token KTR1-...
 ```
 
 トークンには元streamのID、次に必要なsequence、受信済みbyte数、途中CRCが含まれ、
 末尾にもCRCがあります。入力ファイルの内容・ファイル名が元の送信と一致しない場合
 は生成を拒否します。1 packet以上を受信済みなら、profile由来のpacket sizeの不一致も
-受信済みbyte数から検出します。`resume.wav`はSTARTから送り直さず、指定sequenceから
-元の番号とstream IDを保ってENDまでを送ります。
+受信済みbyte数から検出します。再送PCMはSTARTから送り直さず、指定sequenceから元の
+番号とstream IDを保ってENDまでを送ります。WAVとして保存したい検証用途では、従来
+どおり`kotone encode 入力 出力.wav --resume-token KTR1-...`も利用できます。
 
-v0.1ではトークンの受け渡しと再開WAVの再生は手動です。このリポジトリのPython
+v0.1ではトークンの受け渡しと`send`の再実行は手動です。このリポジトリのPython
 decoderはトークンを発行せず、元WAVと再開WAVを結合して復元する機能もありません。
-再開にはAtom Lite受信側に途中データが保持されている必要があります。受信側を停止
+再開にはPC受信側に途中データが保持されている必要があります。受信側を停止
 した場合の`.part`復元方法を含む受信手順は`atom-lite-kotone`のREADMEを参照して
 ください。
+
+Kotoneの`send --resume-token`と`atom-lite-kotone`のPC受信側とのKTR1相互運用には
+対応済みです。一方、`stack-chan-kotone`の現行SD受信コードは異常時に`.part`を削除
+し、KTR1の発行・途中データの復元を行わないため、Stack-chan SD受信側でのresumeは
+まだ利用できません。その場合は先頭から送信し直してください。
 
 `noise`はWAV全体のRMSを測定して指定SNRのwhite Gaussian noiseを付与します。`--seed`を指定すると同一条件を再現できます。mono/stereo、sample rate、frame数を維持し、large WAVもchunk単位で処理します。
 

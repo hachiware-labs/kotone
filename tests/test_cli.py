@@ -7,6 +7,7 @@ from kotone.config import codec_config_for_profile
 from kotone.file_payload import unpack_file_payload
 from kotone.file_payload import pack_file_payload
 from kotone.resume import ResumeToken
+from kotone.sender import SendResult
 
 
 def test_cli_encode_decode(tmp_path) -> None:
@@ -177,3 +178,56 @@ def test_cli_encode_resume_validates_and_forwards_position(
     assert call["data"] == payload
     assert call["kwargs"]["stream_id"] == token.stream_id
     assert call["kwargs"]["start_sequence"] == 1
+
+
+def test_cli_send_uses_a2dp_profile_and_default_speaker(tmp_path, monkeypatch) -> None:
+    original = tmp_path / "send.bin"
+    original.write_bytes(b"Kotone")
+    call = {}
+
+    def fake_send_file(path, config, **kwargs):
+        call.update(path=path, config=config, kwargs=kwargs)
+        return SendResult("Windows default speaker", 0x12345678, 0, 1, 32)
+
+    monkeypatch.setattr("kotone.cli.send_file", fake_send_file)
+
+    assert main(["send", str(original)]) == 0
+    assert call["path"] == original
+    assert call["config"].modem.sample_rate == 44_100
+    assert call["config"].packet_payload_size == 4_096
+    assert call["kwargs"] == {
+        "device": None,
+        "startup_silence_seconds": 0.5,
+        "tail_silence_seconds": 1.0,
+        "resume_token": None,
+    }
+
+
+def test_cli_send_forwards_resume_token(tmp_path, monkeypatch) -> None:
+    original = tmp_path / "send.bin"
+    original.write_bytes(b"Kotone")
+    call = {}
+
+    def fake_send_file(path, config, **kwargs):
+        call.update(kwargs)
+        return SendResult("speaker", 1, 1, 2, 4_100)
+
+    monkeypatch.setattr("kotone.cli.send_file", fake_send_file)
+
+    assert main(["send", str(original), "--resume-token", "KTR1-test"]) == 0
+    assert call["resume_token"] == "KTR1-test"
+
+
+def test_cli_send_reports_non_windows_error(tmp_path, monkeypatch, capsys) -> None:
+    original = tmp_path / "send.bin"
+    original.write_bytes(b"Kotone")
+
+    def unsupported(*args, **kwargs):
+        raise RuntimeError(
+            "kotone send is supported only on Windows (WaveOut is required)"
+        )
+
+    monkeypatch.setattr("kotone.cli.send_file", unsupported)
+
+    assert main(["send", str(original)]) == 2
+    assert "supported only on Windows" in capsys.readouterr().err

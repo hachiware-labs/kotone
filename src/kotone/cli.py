@@ -14,6 +14,7 @@ from kotone.codec import DecodeError
 from kotone.config import codec_config_for_profile
 from kotone.file_payload import pack_file_payload, try_unpack_file_payload
 from kotone.resume import ResumeToken, validate_resume_data
+from kotone.sender import send_file
 
 DEMO_PROFILES = (
     "reliable",
@@ -28,7 +29,9 @@ DEMO_PROFILES = (
 )
 
 
-def _add_modem_options(command: argparse.ArgumentParser) -> None:
+def _add_modem_options(
+    command: argparse.ArgumentParser, *, default_profile: str = "reliable"
+) -> None:
     command.add_argument(
         "--packet-size",
         type=int,
@@ -51,13 +54,13 @@ def _add_modem_options(command: argparse.ArgumentParser) -> None:
             "a2dp-ofdm-328-robust",
             "a2dp-ofdm",
         ),
-        default="reliable",
+        default=default_profile,
         help=(
             "modem profile: reliable=2.4, fast=9.6, a2dp=12, "
             "a2dp-stereo=19.2, a2dp-stereo-fec=24, "
             "a2dp-ofdm-441=67.2, a2dp-ofdm-328=64, "
             "a2dp-ofdm-328-robust=64, "
-            "a2dp-ofdm=96 kbit/s"
+            "a2dp-ofdm=96 kbit/s (default: %(default)s)"
         ),
     )
 
@@ -66,6 +69,35 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="kotone", description="Binary data over PCM audio")
     parser.add_argument("--version", action="version", version="kotone 0.1.0")
     commands = parser.add_subparsers(dest="command", required=True)
+
+    send_command = commands.add_parser(
+        "send", help="send a file through the Windows default speaker"
+    )
+    send_command.add_argument("input", type=Path)
+    send_command.add_argument(
+        "--device",
+        help=(
+            "WaveOut device name fragment or numeric ID; "
+            "default: current Windows default speaker"
+        ),
+    )
+    send_command.add_argument(
+        "--startup-silence-ms",
+        type=float,
+        default=500.0,
+        help="silence before the signal in milliseconds (default: 500)",
+    )
+    send_command.add_argument(
+        "--tail-silence-ms",
+        type=float,
+        default=1_000.0,
+        help="silence after the signal in milliseconds (default: 1000)",
+    )
+    send_command.add_argument(
+        "--resume-token",
+        help="resume token shown by the receiver",
+    )
+    _add_modem_options(send_command, default_profile="a2dp-ofdm-441")
 
     encode_command = commands.add_parser("encode", help="encode a binary file as WAV")
     encode_command.add_argument("input", type=Path)
@@ -82,7 +114,7 @@ def _parser() -> argparse.ArgumentParser:
     encode_command.add_argument(
         "--resume-token",
         help=(
-            "resume token shown by the receiving PC; validates the original "
+            "resume token shown by the receiver; validates the original "
             "file and emits only the still-needed packets"
         ),
     )
@@ -197,6 +229,21 @@ def main(argv: list[str] | None = None) -> int:
         config = codec_config_for_profile(
             args.profile, packet_payload_size=args.packet_size
         )
+        if args.command == "send":
+            result = send_file(
+                args.input,
+                config,
+                device=args.device,
+                startup_silence_seconds=args.startup_silence_ms / 1_000,
+                tail_silence_seconds=args.tail_silence_ms / 1_000,
+                resume_token=args.resume_token,
+            )
+            print(
+                f"Sent stream {result.stream_id:08X} packets "
+                f"{result.first_sequence}-{result.packet_count - 1} "
+                f"through {result.device_name}"
+            )
+            return 0
         if args.command == "encode":
             data = pack_file_payload(args.input.name, args.input.read_bytes())
             resume = (

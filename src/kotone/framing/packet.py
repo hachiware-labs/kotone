@@ -87,6 +87,91 @@ class FrameEncoder:
         ):
             yield packet.to_bytes()
 
+    def packets_from_chunks(
+        self,
+        chunks: Iterable[bytes],
+        *,
+        total_size: int,
+        stream_id: int,
+        start_sequence: int = 0,
+        source_offset: int = 0,
+    ) -> Iterator[Packet]:
+        """Frame a bounded stream without collecting the full payload in memory."""
+        if total_size < 0:
+            raise ValueError("total_size must not be negative")
+        packet_count = max(1, (total_size + self.payload_size - 1) // self.payload_size)
+        if not 0 <= start_sequence < packet_count:
+            raise ValueError(
+                f"start_sequence must be in [0, {packet_count - 1}]"
+            )
+        expected_offset = start_sequence * self.payload_size
+        if not 0 <= source_offset <= expected_offset:
+            raise ValueError(f"source_offset must be in [0, {expected_offset}]")
+
+        skip = expected_offset - source_offset
+        expected_source_size = total_size - source_offset
+        source_size = 0
+        sequence = start_sequence
+        last = packet_count - 1
+        buffered = bytearray()
+
+        for chunk in chunks:
+            raw = bytes(chunk)
+            source_size += len(raw)
+            if source_size > expected_source_size:
+                raise ValueError("chunk stream exceeds total_size")
+            if skip:
+                skipped = min(skip, len(raw))
+                raw = raw[skipped:]
+                skip -= skipped
+            if raw:
+                buffered.extend(raw)
+            while len(buffered) >= self.payload_size:
+                payload = bytes(buffered[: self.payload_size])
+                del buffered[: self.payload_size]
+                flags = (
+                    (FLAG_START if sequence == 0 else 0)
+                    | (FLAG_END if sequence == last else 0)
+                )
+                yield Packet(flags, stream_id, sequence, payload)
+                sequence += 1
+
+        if source_size != expected_source_size:
+            raise ValueError(
+                f"chunk stream has {source_size} bytes, expected {expected_source_size}"
+            )
+        if skip:
+            raise ValueError("chunk stream ended before start_sequence")
+        if buffered or total_size == 0:
+            flags = (
+                (FLAG_START if sequence == 0 else 0)
+                | (FLAG_END if sequence == last else 0)
+            )
+            yield Packet(flags, stream_id, sequence, bytes(buffered))
+            sequence += 1
+        if sequence != packet_count:
+            raise ValueError(
+                f"chunk stream produced {sequence} packets, expected {packet_count}"
+            )
+
+    def iter_chunk_bytes(
+        self,
+        chunks: Iterable[bytes],
+        *,
+        total_size: int,
+        stream_id: int,
+        start_sequence: int = 0,
+        source_offset: int = 0,
+    ) -> Iterator[bytes]:
+        for packet in self.packets_from_chunks(
+            chunks,
+            total_size=total_size,
+            stream_id=stream_id,
+            start_sequence=start_sequence,
+            source_offset=source_offset,
+        ):
+            yield packet.to_bytes()
+
     def encode(self, data: bytes) -> bytes:
         return b"".join(self.iter_bytes(data))
 

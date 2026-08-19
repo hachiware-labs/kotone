@@ -1,5 +1,6 @@
 import hashlib
 import os
+import zlib
 
 import numpy as np
 import pytest
@@ -11,6 +12,7 @@ from kotone import (
     decode,
     encode,
 )
+from kotone.codec import Encoder
 
 
 @pytest.mark.parametrize("size", [0, 1, 31, 512, 2_049])
@@ -118,3 +120,36 @@ def test_stereo_qpsk_ofdm_328_robust_profile_round_trip() -> None:
     assert config.modem.fec_symbols == 32
     assert config.modem.raw_bitrate == 64_000
     assert decode(encode(original, config), config) == original
+
+
+def test_chunked_encoder_matches_resume_encoding() -> None:
+    config = CodecConfig(packet_payload_size=256)
+    original = bytes(range(256)) * 5
+    stream_id = zlib.crc32(original)
+    source_offset = 512
+
+    expected = list(
+        Encoder(config).iter_encode(
+            original,
+            stream_id=stream_id,
+            start_sequence=2,
+        )
+    )
+    actual = list(
+        Encoder(config).iter_encode_chunks(
+            (
+                original[index : index + 137]
+                for index in range(source_offset, len(original), 137)
+            ),
+            total_size=len(original),
+            stream_id=stream_id,
+            start_sequence=2,
+            source_offset=source_offset,
+        )
+    )
+
+    assert len(actual) == len(expected)
+    assert all(
+        np.array_equal(actual_chunk, expected_chunk)
+        for actual_chunk, expected_chunk in zip(actual, expected, strict=True)
+    )

@@ -6,6 +6,7 @@ from kotone.file_payload import (
     FILE_HEADER,
     FilePayloadError,
     pack_file_payload,
+    prepare_file_payload_source,
     try_unpack_file_payload,
     unpack_file_payload,
 )
@@ -52,3 +53,18 @@ def test_invalid_declared_size_is_rejected() -> None:
     packed[file_size_offset : file_size_offset + 8] = (999).to_bytes(8, "big")
     with pytest.raises(FilePayloadError, match="size"):
         unpack_file_payload(packed)
+
+
+def test_packed_file_source_streams_full_payload_and_offsets(tmp_path) -> None:
+    path = tmp_path / "資料.bin"
+    data = bytes(range(256)) * 40
+    path.write_bytes(data)
+    expected = pack_file_payload(path.name, data)
+
+    source = prepare_file_payload_source(path, chunk_size=257)
+
+    assert source.total_size == len(expected)
+    assert source.stream_id == zlib.crc32(expected)
+    assert b"".join(source.iter_chunks(chunk_size=113)) == expected
+    assert b"".join(source.iter_chunks(offset=4_096, chunk_size=113)) == expected[4_096:]
+    assert source.crc32_prefix(4_096) == zlib.crc32(expected[:4_096])

@@ -71,6 +71,24 @@ class Encoder:
         ):
             yield self.modem.modulate(self.fec.encode(framed_packet))
 
+    def iter_encode_chunks(
+        self,
+        chunks: Iterable[bytes],
+        *,
+        total_size: int,
+        stream_id: int,
+        start_sequence: int = 0,
+        source_offset: int = 0,
+    ) -> Iterator[NDArray[np.float32]]:
+        for framed_packet in self.framer.iter_chunk_bytes(
+            chunks,
+            total_size=total_size,
+            stream_id=stream_id,
+            start_sequence=start_sequence,
+            source_offset=source_offset,
+        ):
+            yield self.modem.modulate(self.fec.encode(framed_packet))
+
     def push(self, data: bytes) -> NDArray[np.float32]:
         return self.encode(data)
 
