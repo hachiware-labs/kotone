@@ -26,6 +26,13 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build]
+exclude = [
+    "/demo-audio",
+    "/Kotone-*-speed-*.bin",
+    "/Kotone送信テスト.txt",
+]
+
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]

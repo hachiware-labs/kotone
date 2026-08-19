@@ -10,6 +10,7 @@ Kotoneは、任意のバイナリデータをPCM音声へ変換し、音声か�
 - レジストリから差し替え可能なModem実装
 - 複数パケットへの分割、Stream ID、Sequence Number
 - パケット単位のCRC32検証と欠落検出
+- 対応受信側が発行したトークンから未受信パケットだけを再送するWAV生成
 - UTF-8ファイル名、本文サイズ、本文CRC32を持つKTF1 file payload
 - `bytes -> PCM -> bytes` API
 - メモリ使用量を抑えたストリーミングWAV書き込み・読み込み
@@ -23,6 +24,8 @@ FFmpeg SBC simulationとReed–Solomon FECを実装済みです。Atom LiteのA2
 Python 3.12以降と[uv](https://docs.astral.sh/uv/)を使用します。
 
 ```powershell
+git clone https://github.com/hachiware-labs/kotone.git
+cd .\kotone
 uv sync
 uv run kotone --help
 ```
@@ -47,8 +50,6 @@ uv run kotone decode noisy.wav restored.bin --profile a2dp-ofdm-328-robust
 PowerShellの実行例です。
 
 ```powershell
-cd C:\Users\naruhide\workspace\kotone
-
 uv run kotone encode .\資料.bin .\send.wav --profile a2dp-ofdm-441
 uv run kotone decode .\send.wav --profile a2dp-ofdm-441
 ```
@@ -57,6 +58,27 @@ uv run kotone decode .\send.wav --profile a2dp-ofdm-441
 埋め込みます。`decode`の出力ファイルを省略すると、その名前を検証し、現在の
 ディレクトリへ`資料.bin`として復元します。既に同名ファイルがある場合は上書き
 されるため、必要なら先に別の場所へ移動してください。
+
+Atom Lite受信側がpacket欠落やtimeoutを検出して`RESUME_TOKEN=KTR1-...`を表示
+した場合は、トークンをPCへコピーし、同じ入力ファイルから未受信packetだけを含む
+再開WAVを生成できます。
+
+```powershell
+uv run kotone encode .\資料.bin .\resume.wav `
+  --profile a2dp-ofdm-441 --resume-token KTR1-...
+```
+
+トークンには元streamのID、次に必要なsequence、受信済みbyte数、途中CRCが含まれ、
+末尾にもCRCがあります。入力ファイルの内容・ファイル名が元の送信と一致しない場合
+は生成を拒否します。1 packet以上を受信済みなら、profile由来のpacket sizeの不一致も
+受信済みbyte数から検出します。`resume.wav`はSTARTから送り直さず、指定sequenceから
+元の番号とstream IDを保ってENDまでを送ります。
+
+v0.1ではトークンの受け渡しと再開WAVの再生は手動です。このリポジトリのPython
+decoderはトークンを発行せず、元WAVと再開WAVを結合して復元する機能もありません。
+再開にはAtom Lite受信側に途中データが保持されている必要があります。受信側を停止
+した場合の`.part`復元方法を含む受信手順は`atom-lite-kotone`のREADMEを参照して
+ください。
 
 `noise`はWAV全体のRMSを測定して指定SNRのwhite Gaussian noiseを付与します。`--seed`を指定すると同一条件を再現できます。mono/stereo、sample rate、frame数を維持し、large WAVもchunk単位で処理します。
 

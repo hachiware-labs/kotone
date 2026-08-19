@@ -1,6 +1,7 @@
 import os
 
 from kotone.framing import FrameEncoder, FrameStreamDecoder
+from kotone.framing.packet import FLAG_END, FLAG_START
 
 
 def test_frames_round_trip_incrementally() -> None:
@@ -33,3 +34,15 @@ def test_empty_payload_round_trip() -> None:
     result = decoder.finish()
     assert result.success
     assert result.data == b""
+
+
+def test_resume_packets_keep_original_sequence_and_stream() -> None:
+    data = bytes(range(256)) * 20
+    encoder = FrameEncoder(payload_size=1_024)
+    packets = list(
+        encoder.packets(data, stream_id=0x54D87381, start_sequence=3)
+    )
+    assert packets[0].stream_id == 0x54D87381
+    assert packets[0].sequence == 3
+    assert not packets[0].flags & FLAG_START
+    assert packets[-1].flags & FLAG_END

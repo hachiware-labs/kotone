@@ -17,6 +17,8 @@ def encode_wav(
     config: CodecConfig | None = None,
     *,
     startup_silence_seconds: float = 0.0,
+    stream_id: int | None = None,
+    start_sequence: int = 0,
 ) -> None:
     settings = config or CodecConfig()
     if startup_silence_seconds < 0:
@@ -39,7 +41,9 @@ def encode_wav(
                 silence_chunk[: frame_count * settings.modem.channel_count * 2]
             )
             silence_frames -= frame_count
-        for samples in encoder.iter_encode(data):
+        for samples in encoder.iter_encode(
+            data, stream_id=stream_id, start_sequence=start_sequence
+        ):
             pcm = np.rint(np.clip(samples, -1.0, 1.0) * 32_767).astype("<i2")
             output.writeframesraw(pcm.tobytes())
 

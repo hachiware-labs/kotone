@@ -54,19 +54,37 @@ class FrameEncoder:
             raise ValueError("payload_size must be in [1, 65535]")
         self.payload_size = payload_size
 
-    def packets(self, data: bytes, *, stream_id: int | None = None) -> Iterator[Packet]:
+    def packets(
+        self,
+        data: bytes,
+        *,
+        stream_id: int | None = None,
+        start_sequence: int = 0,
+    ) -> Iterator[Packet]:
         raw = bytes(data)
         identifier = zlib.crc32(raw) if stream_id is None else stream_id
-        chunks = [raw[i : i + self.payload_size] for i in range(0, len(raw), self.payload_size)]
-        if not chunks:
-            chunks = [b""]
-        last = len(chunks) - 1
-        for sequence, payload in enumerate(chunks):
+        packet_count = max(1, (len(raw) + self.payload_size - 1) // self.payload_size)
+        if not 0 <= start_sequence < packet_count:
+            raise ValueError(
+                f"start_sequence must be in [0, {packet_count - 1}]"
+            )
+        last = packet_count - 1
+        for sequence in range(start_sequence, packet_count):
+            offset = sequence * self.payload_size
+            payload = raw[offset : offset + self.payload_size]
             flags = (FLAG_START if sequence == 0 else 0) | (FLAG_END if sequence == last else 0)
             yield Packet(flags, identifier, sequence, payload)
 
-    def iter_bytes(self, data: bytes) -> Iterator[bytes]:
-        for packet in self.packets(data):
+    def iter_bytes(
+        self,
+        data: bytes,
+        *,
+        stream_id: int | None = None,
+        start_sequence: int = 0,
+    ) -> Iterator[bytes]:
+        for packet in self.packets(
+            data, stream_id=stream_id, start_sequence=start_sequence
+        ):
             yield packet.to_bytes()
 
     def encode(self, data: bytes) -> bytes:

@@ -13,6 +13,7 @@ from kotone.channel.wav import decode_wav, encode_wav
 from kotone.codec import DecodeError
 from kotone.config import codec_config_for_profile
 from kotone.file_payload import pack_file_payload, try_unpack_file_payload
+from kotone.resume import ResumeToken, validate_resume_data
 
 DEMO_PROFILES = (
     "reliable",
@@ -76,6 +77,13 @@ def _parser() -> argparse.ArgumentParser:
         help=(
             "silence before the signal; default: 500 for a2dp-ofdm-441, "
             "0 for other profiles"
+        ),
+    )
+    encode_command.add_argument(
+        "--resume-token",
+        help=(
+            "resume token shown by the receiving PC; validates the original "
+            "file and emits only the still-needed packets"
         ),
     )
     _add_modem_options(encode_command)
@@ -191,6 +199,27 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.command == "encode":
             data = pack_file_payload(args.input.name, args.input.read_bytes())
+            resume = (
+                ResumeToken.parse(args.resume_token)
+                if args.resume_token is not None
+                else None
+            )
+            if resume is not None:
+                validate_resume_data(
+                    resume,
+                    data,
+                    packet_payload_size=config.packet_payload_size,
+                )
+                packet_count = max(
+                    1,
+                    (len(data) + config.packet_payload_size - 1)
+                    // config.packet_payload_size,
+                )
+                print(
+                    f"Resume stream {resume.stream_id:08X} from packet "
+                    f"{resume.next_sequence}/{packet_count - 1} "
+                    f"after {resume.accepted_bytes} bytes"
+                )
             startup_silence_seconds = (
                 args.startup_silence_ms / 1_000
                 if args.startup_silence_ms is not None
@@ -201,6 +230,10 @@ def main(argv: list[str] | None = None) -> int:
                 args.output,
                 config,
                 startup_silence_seconds=startup_silence_seconds,
+                stream_id=resume.stream_id if resume is not None else None,
+                start_sequence=(
+                    resume.next_sequence if resume is not None else 0
+                ),
             )
             return 0
         if args.command == "decode":

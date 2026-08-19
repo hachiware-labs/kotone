@@ -59,8 +59,16 @@ class Encoder:
         self.fec = fec or IdentityFEC()
         self.framer = FrameEncoder(self.config.packet_payload_size)
 
-    def iter_encode(self, data: bytes) -> Iterator[NDArray[np.float32]]:
-        for framed_packet in self.framer.iter_bytes(bytes(data)):
+    def iter_encode(
+        self,
+        data: bytes,
+        *,
+        stream_id: int | None = None,
+        start_sequence: int = 0,
+    ) -> Iterator[NDArray[np.float32]]:
+        for framed_packet in self.framer.iter_bytes(
+            bytes(data), stream_id=stream_id, start_sequence=start_sequence
+        ):
             yield self.modem.modulate(self.fec.encode(framed_packet))
 
     def push(self, data: bytes) -> NDArray[np.float32]:

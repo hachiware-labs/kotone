@@ -1,9 +1,12 @@
 import wave
+import zlib
 
 from kotone.channel.wav import decode_wav
 from kotone.cli import main
 from kotone.config import codec_config_for_profile
 from kotone.file_payload import unpack_file_payload
+from kotone.file_payload import pack_file_payload
+from kotone.resume import ResumeToken
 
 
 def test_cli_encode_decode(tmp_path) -> None:
@@ -134,3 +137,43 @@ def test_cli_encode_noise_decode_pipeline(tmp_path) -> None:
     )
     assert main(["decode", str(noisy), str(restored), *profile]) == 0
     assert restored.read_bytes() == original.read_bytes()
+
+
+def test_cli_encode_resume_validates_and_forwards_position(
+    tmp_path, monkeypatch
+) -> None:
+    original = tmp_path / "resume.bin"
+    output = tmp_path / "resume.wav"
+    original.write_bytes(bytes(range(256)) * 40)
+    payload = pack_file_payload(original.name, original.read_bytes())
+    packet_size = 4_096
+    accepted = packet_size
+    token = ResumeToken(
+        zlib.crc32(payload),
+        1,
+        accepted,
+        zlib.crc32(payload[:accepted]),
+    )
+    call = {}
+
+    def fake_encode_wav(data, path, config, **kwargs):
+        call.update(data=data, path=path, config=config, kwargs=kwargs)
+
+    monkeypatch.setattr("kotone.cli.encode_wav", fake_encode_wav)
+    assert (
+        main(
+            [
+                "encode",
+                str(original),
+                str(output),
+                "--profile",
+                "a2dp-ofdm-441",
+                "--resume-token",
+                token.encode(),
+            ]
+        )
+        == 0
+    )
+    assert call["data"] == payload
+    assert call["kwargs"]["stream_id"] == token.stream_id
+    assert call["kwargs"]["start_sequence"] == 1
