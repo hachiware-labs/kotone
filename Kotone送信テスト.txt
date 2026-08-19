@@ -1,0 +1,7 @@
+Kotone Atom Speaker ファイル送信テスト
+送信日: 2026-08-18
+
+このファイルは、Windows Bluetooth A2DPからAtom Liteへ送信し、
+Kotone OFDMで復号した後、USB COM4経由でPCへ保存する確認用です。
+
+日本語ファイル名、本文、サイズ、CRCが一致すればテスト成功です。

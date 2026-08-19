@@ -43,13 +43,20 @@ uv run kotone noise clean.wav noisy.wav --snr-db 20 --seed 42
 uv run kotone decode noisy.wav restored.bin --profile a2dp-ofdm-328-robust
 ```
 
-`encode`は入力ファイルのbasenameをUTF-8でpayload先頭へ埋め込みます。`decode`の
-出力ファイルを省略すると、その名前を検証して現在のディレクトリへ復元します。
+`a2dp-ofdm-441`でファイルを44.1 kHzのWAVへ変換し、元のファイル名で復元する
+PowerShellの実行例です。
 
 ```powershell
-uv run kotone encode 資料.bin transmission.wav --profile a2dp-ofdm-441
-uv run kotone decode transmission.wav --profile a2dp-ofdm-441
+cd C:\Users\naruhide\workspace\kotone
+
+uv run kotone encode .\資料.bin .\send.wav --profile a2dp-ofdm-441
+uv run kotone decode .\send.wav --profile a2dp-ofdm-441
 ```
+
+`encode`は入力ファイルのbasename（この例では`資料.bin`）をUTF-8でpayload先頭へ
+埋め込みます。`decode`の出力ファイルを省略すると、その名前を検証し、現在の
+ディレクトリへ`資料.bin`として復元します。既に同名ファイルがある場合は上書き
+されるため、必要なら先に別の場所へ移動してください。
 
 `noise`はWAV全体のRMSを測定して指定SNRのwhite Gaussian noiseを付与します。`--seed`を指定すると同一条件を再現できます。mono/stereo、sample rate、frame数を維持し、large WAVもchunk単位で処理します。
 
