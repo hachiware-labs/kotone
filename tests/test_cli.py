@@ -6,7 +6,7 @@ from kotone.cli import main
 from kotone.config import codec_config_for_profile
 from kotone.file_payload import unpack_file_payload
 from kotone.file_payload import pack_file_payload
-from kotone.resume import ResumeToken
+from kotone.resume import ResumeState, write_resume_state
 from kotone.sender import SendResult
 
 
@@ -149,12 +149,16 @@ def test_cli_encode_resume_validates_and_forwards_position(
     payload = pack_file_payload(original.name, original.read_bytes())
     packet_size = 4_096
     accepted = packet_size
-    token = ResumeToken(
+    state = ResumeState(
+        "00A3F",
         zlib.crc32(payload),
         1,
         accepted,
         zlib.crc32(payload[:accepted]),
+        packet_size,
     )
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
+    write_resume_state(state)
     call = {}
 
     def fake_encode_wav(data, path, config, **kwargs):
@@ -169,14 +173,14 @@ def test_cli_encode_resume_validates_and_forwards_position(
                 str(output),
                 "--profile",
                 "a2dp-ofdm-441",
-                "--resume-token",
-                token.encode(),
+                "--resume",
+                "00A3F",
             ]
         )
         == 0
     )
     assert call["data"] == payload
-    assert call["kwargs"]["stream_id"] == token.stream_id
+    assert call["kwargs"]["stream_id"] == state.stream_id
     assert call["kwargs"]["start_sequence"] == 1
 
 
@@ -199,11 +203,11 @@ def test_cli_send_uses_a2dp_profile_and_default_speaker(tmp_path, monkeypatch) -
         "device": None,
         "startup_silence_seconds": 0.5,
         "tail_silence_seconds": 1.0,
-        "resume_token": None,
+        "resume_id": None,
     }
 
 
-def test_cli_send_forwards_resume_token(tmp_path, monkeypatch) -> None:
+def test_cli_send_forwards_resume_id(tmp_path, monkeypatch) -> None:
     original = tmp_path / "send.bin"
     original.write_bytes(b"Kotone")
     call = {}
@@ -214,8 +218,8 @@ def test_cli_send_forwards_resume_token(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr("kotone.cli.send_file", fake_send_file)
 
-    assert main(["send", str(original), "--resume-token", "KTR1-test"]) == 0
-    assert call["resume_token"] == "KTR1-test"
+    assert main(["send", str(original), "--resume", "00A3F"]) == 0
+    assert call["resume_id"] == "00A3F"
 
 
 def test_cli_send_reports_non_windows_error(tmp_path, monkeypatch, capsys) -> None:

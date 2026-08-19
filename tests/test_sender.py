@@ -7,25 +7,26 @@ import kotone.sender as sender
 from kotone.channel import waveout
 from kotone.config import codec_config_for_profile
 from kotone.file_payload import pack_file_payload
-from kotone.resume import ResumeToken
 
 
-def test_send_file_accepts_atom_pc_resume_fixture_and_streams_tail(
+def test_send_file_accepts_five_digit_pc_resume_fixture_and_streams_tail(
     tmp_path, monkeypatch
 ) -> None:
     path = tmp_path / "pc-resume.bin"
     path.write_bytes(bytes(range(256)) * 40)
     packed = pack_file_payload(path.name, path.read_bytes())
-    # Fixed KTR1 fixture using atom-lite-kotone Capture-Kotone.py's
-    # >4sIIQI body and trailing CRC32 format.
-    encoded_token = (
-        "KTR1-3A0A3250-00000001-0000000000001000-32D46FBF-5EB013AB"
+    resume_directory = tmp_path / "resume"
+    resume_directory.mkdir()
+    # Fixed JSON contract shared with atom-lite-kotone's PC receiver.
+    (resume_directory / "00A3F.json").write_text(
+        '{"version":1,"resume_id":"00A3F","stream_id":973746768,'
+        '"next_sequence":1,"accepted_bytes":4096,'
+        '"stream_crc":852783039,"packet_payload_size":4096}\n',
+        encoding="utf-8",
     )
-    token = ResumeToken.parse(encoded_token)
     accepted = 4_096
-    assert token == ResumeToken(0x3A0A3250, 1, accepted, 0x32D46FBF)
-    assert zlib.crc32(packed) == token.stream_id
-    assert zlib.crc32(packed[:accepted]) == token.stream_crc
+    assert zlib.crc32(packed) == 0x3A0A3250
+    assert zlib.crc32(packed[:accepted]) == 0x32D46FBF
     call = {}
 
     class FakeEncoder:
@@ -49,7 +50,8 @@ def test_send_file_accepts_atom_pc_resume_fixture_and_streams_tail(
     result = sender.send_file(
         path,
         codec_config_for_profile("a2dp-ofdm-441"),
-        resume_token=encoded_token,
+        resume_id="00A3F",
+        resume_directory=resume_directory,
         startup_silence_seconds=0.01,
         tail_silence_seconds=0.02,
     )

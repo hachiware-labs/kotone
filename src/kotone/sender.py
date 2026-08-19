@@ -10,7 +10,7 @@ from kotone.channel.waveout import ensure_waveout_supported, play_pcm16
 from kotone.codec import Encoder
 from kotone.config import CodecConfig
 from kotone.file_payload import prepare_file_payload_source
-from kotone.resume import ResumeToken, validate_resume_metadata
+from kotone.resume import load_resume_state, validate_resume_state
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +68,8 @@ def send_file(
     device: str | None = None,
     startup_silence_seconds: float = 0.5,
     tail_silence_seconds: float = 1.0,
-    resume_token: str | ResumeToken | None = None,
+    resume_id: str | None = None,
+    resume_directory: str | Path | None = None,
 ) -> SendResult:
     ensure_waveout_supported()
     if startup_silence_seconds < 0:
@@ -78,9 +79,9 @@ def send_file(
 
     source = prepare_file_payload_source(path)
     resume = (
-        ResumeToken.parse(resume_token)
-        if isinstance(resume_token, str)
-        else resume_token
+        load_resume_state(resume_id, directory=resume_directory)
+        if resume_id is not None
+        else None
     )
     first_sequence = 0
     source_offset = 0
@@ -89,7 +90,7 @@ def send_file(
             resume.next_sequence * config.packet_payload_size,
             source.total_size,
         )
-        validate_resume_metadata(
+        validate_resume_state(
             resume,
             stream_id=source.stream_id,
             total_size=source.total_size,

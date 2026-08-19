@@ -10,7 +10,7 @@ Kotoneは、任意のバイナリデータをPCM音声へ変換し、音声か�
 - レジストリから差し替え可能なModem実装
 - 複数パケットへの分割、Stream ID、Sequence Number
 - パケット単位のCRC32検証と欠落検出
-- 対応受信側が発行したトークンから未受信パケットだけを再送するWAV生成
+- 対応受信側が発行した5桁IDから未受信パケットだけを再送
 - Windowsの既定スピーカーへ直接ストリーミング再生する`kotone send`
 - UTF-8ファイル名、本文サイズ、本文CRC32を持つKTF1 file payload
 - `bytes -> PCM -> bytes` API
@@ -92,29 +92,29 @@ uv run kotone decode .\send.wav --profile a2dp-ofdm-441
 されるため、必要なら先に別の場所へ移動してください。
 
 `atom-lite-kotone`のPC受信スクリプトがpacket欠落やtimeoutを検出して
-`RESUME_TOKEN=KTR1-...`を表示した場合は、同じ入力ファイルから未受信packetだけを
-含むPCMを直接再送できます。
+`RESUME_ID=00A3F`のような5桁IDを表示した場合は、同じ入力ファイルから未受信packet
+だけを含むPCMを直接再送できます。
 
 ```powershell
-kotone send .\資料.bin --resume-token KTR1-...
+kotone send .\資料.bin --resume 00A3F
 ```
 
-トークンには元streamのID、次に必要なsequence、受信済みbyte数、途中CRCが含まれ、
-末尾にもCRCがあります。入力ファイルの内容・ファイル名が元の送信と一致しない場合
-は生成を拒否します。1 packet以上を受信済みなら、profile由来のpacket sizeの不一致も
-受信済みbyte数から検出します。再送PCMはSTARTから送り直さず、指定sequenceから元の
-番号とstream IDを保ってENDまでを送ります。WAVとして保存したい検証用途では、従来
-どおり`kotone encode 入力 出力.wav --resume-token KTR1-...`も利用できます。
+PC受信側は5桁16進連番を発行し、元streamのID、次に必要なsequence、受信済みbyte数、
+途中CRC、packet sizeを`%LOCALAPPDATA%\Kotone\resume\<ID>.json`へ保存します。Kotoneは
+IDからこの状態を読みます。入力ファイルの内容・ファイル名・packet sizeが元の送信と
+一致しない場合は送信を拒否します。再送PCMはSTARTから送り直さず、指定sequenceから
+元の番号とstream IDを保ってENDまでを送ります。WAVとして保存したい検証用途では
+`kotone encode 入力 出力.wav --resume 00A3F`も利用できます。
 
-v0.1ではトークンの受け渡しと`send`の再実行は手動です。このリポジトリのPython
-decoderはトークンを発行せず、元WAVと再開WAVを結合して復元する機能もありません。
+v0.1では5桁IDの受け渡しと`send`の再実行は手動です。このリポジトリのPython
+decoderはIDを発行せず、元WAVと再開WAVを結合して復元する機能もありません。
 再開にはPC受信側に途中データが保持されている必要があります。受信側を停止
 した場合の`.part`復元方法を含む受信手順は`atom-lite-kotone`のREADMEを参照して
 ください。
 
-Kotoneの`send --resume-token`と`atom-lite-kotone`のPC受信側とのKTR1相互運用には
+Kotoneの`send --resume`と`atom-lite-kotone`のPC受信側との5桁ID相互運用には
 対応済みです。一方、`stack-chan-kotone`の現行SD受信コードは異常時に`.part`を削除
-し、KTR1の発行・途中データの復元を行わないため、Stack-chan SD受信側でのresumeは
+し、resume IDの発行・途中データの復元を行わないため、Stack-chan SD受信側でのresumeは
 まだ利用できません。その場合は先頭から送信し直してください。
 
 `noise`はWAV全体のRMSを測定して指定SNRのwhite Gaussian noiseを付与します。`--seed`を指定すると同一条件を再現できます。mono/stereo、sample rate、frame数を維持し、large WAVもchunk単位で処理します。

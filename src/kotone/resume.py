@@ -1,84 +1,142 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import os
+from pathlib import Path
 import re
-import struct
-import zlib
 
 
-TOKEN_VERSION = "KTR1"
-_TOKEN_BODY = struct.Struct(">4sIIQI")
-_TOKEN_PATTERN = re.compile(
-    r"^KTR1-([0-9A-Fa-f]{8})-([0-9A-Fa-f]{8})-"
-    r"([0-9A-Fa-f]{16})-([0-9A-Fa-f]{8})-([0-9A-Fa-f]{8})$"
-)
+RESUME_STATE_VERSION = 1
+_RESUME_ID_PATTERN = re.compile(r"^[0-9A-Fa-f]{5}$")
+
+
+def normalize_resume_id(value: str) -> str:
+    candidate = value.strip()
+    if _RESUME_ID_PATTERN.fullmatch(candidate) is None:
+        raise ValueError("resume ID must be exactly five hexadecimal digits")
+    return candidate.upper()
+
+
+def default_resume_directory() -> Path:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        return Path(local_app_data) / "Kotone" / "resume"
+    return Path.home() / ".local" / "state" / "kotone" / "resume"
 
 
 @dataclass(frozen=True, slots=True)
-class ResumeToken:
+class ResumeState:
+    resume_id: str
     stream_id: int
     next_sequence: int
     accepted_bytes: int
     stream_crc: int
+    packet_payload_size: int
 
-    def encode(self) -> str:
-        body = _TOKEN_BODY.pack(
-            TOKEN_VERSION.encode("ascii"),
-            self.stream_id,
-            self.next_sequence,
-            self.accepted_bytes,
-            self.stream_crc,
-        )
-        checksum = zlib.crc32(body)
-        return (
-            f"{TOKEN_VERSION}-{self.stream_id:08X}-{self.next_sequence:08X}-"
-            f"{self.accepted_bytes:016X}-{self.stream_crc:08X}-{checksum:08X}"
-        )
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "resume_id", normalize_resume_id(self.resume_id))
+        if not 0 <= self.stream_id <= 0xFFFFFFFF:
+            raise ValueError("stream_id must fit in 32 bits")
+        if not 0 <= self.next_sequence <= 0xFFFFFFFF:
+            raise ValueError("next_sequence must fit in 32 bits")
+        if not 0 <= self.accepted_bytes <= 0xFFFFFFFFFFFFFFFF:
+            raise ValueError("accepted_bytes must fit in 64 bits")
+        if not 0 <= self.stream_crc <= 0xFFFFFFFF:
+            raise ValueError("stream_crc must fit in 32 bits")
+        if not 1 <= self.packet_payload_size <= 65_535:
+            raise ValueError("packet_payload_size must be in [1, 65535]")
+        expected_bytes = self.next_sequence * self.packet_payload_size
+        if self.accepted_bytes != expected_bytes:
+            raise ValueError(
+                "resume state byte position does not match packet size: "
+                f"state={self.accepted_bytes}, expected={expected_bytes}"
+            )
+
+    def as_dict(self) -> dict[str, int | str]:
+        return {
+            "version": RESUME_STATE_VERSION,
+            "resume_id": self.resume_id,
+            "stream_id": self.stream_id,
+            "next_sequence": self.next_sequence,
+            "accepted_bytes": self.accepted_bytes,
+            "stream_crc": self.stream_crc,
+            "packet_payload_size": self.packet_payload_size,
+        }
 
     @classmethod
-    def parse(cls, value: str) -> ResumeToken:
-        match = _TOKEN_PATTERN.fullmatch(value.strip())
-        if match is None:
-            raise ValueError("resume token has an invalid format")
-        stream_id, next_sequence, accepted_bytes, stream_crc, checksum = (
-            int(field, 16) for field in match.groups()
-        )
-        body = _TOKEN_BODY.pack(
-            TOKEN_VERSION.encode("ascii"),
-            stream_id,
-            next_sequence,
-            accepted_bytes,
-            stream_crc,
-        )
-        calculated = zlib.crc32(body)
-        if checksum != calculated:
-            raise ValueError(
-                "resume token CRC mismatch: "
-                f"expected {checksum:08X}, calculated {calculated:08X}"
+    def from_dict(cls, value: object) -> ResumeState:
+        if not isinstance(value, dict) or value.get("version") != RESUME_STATE_VERSION:
+            raise ValueError("resume state has an unsupported version")
+        expected_keys = {
+            "version",
+            "resume_id",
+            "stream_id",
+            "next_sequence",
+            "accepted_bytes",
+            "stream_crc",
+            "packet_payload_size",
+        }
+        if set(value) != expected_keys:
+            raise ValueError("resume state fields are invalid")
+        try:
+            return cls(
+                str(value["resume_id"]),
+                int(value["stream_id"]),
+                int(value["next_sequence"]),
+                int(value["accepted_bytes"]),
+                int(value["stream_crc"]),
+                int(value["packet_payload_size"]),
             )
-        return cls(stream_id, next_sequence, accepted_bytes, stream_crc)
+        except (TypeError, ValueError) as error:
+            raise ValueError("resume state values are invalid") from error
 
 
-def validate_resume_data(
-    token: ResumeToken,
-    data: bytes,
-    *,
-    packet_payload_size: int,
-) -> None:
-    raw = bytes(data)
-    stream_id = zlib.crc32(raw)
-    expected_bytes = min(token.next_sequence * packet_payload_size, len(raw))
-    validate_resume_metadata(
-        token,
-        stream_id=stream_id,
-        total_size=len(raw),
-        packet_payload_size=packet_payload_size,
-        prefix_crc=zlib.crc32(raw[:expected_bytes]),
-    )
+def resume_state_path(
+    resume_id: str, *, directory: str | Path | None = None
+) -> Path:
+    normalized = normalize_resume_id(resume_id)
+    root = Path(directory) if directory is not None else default_resume_directory()
+    return root / f"{normalized}.json"
 
 
-def validate_resume_metadata(
-    token: ResumeToken,
+def load_resume_state(
+    resume_id: str, *, directory: str | Path | None = None
+) -> ResumeState:
+    normalized = normalize_resume_id(resume_id)
+    path = resume_state_path(normalized, directory=directory)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise ValueError(f"resume ID {normalized} was not found") from error
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"resume state {normalized} could not be read") from error
+    state = ResumeState.from_dict(raw)
+    if state.resume_id != normalized:
+        raise ValueError("resume state ID does not match its filename")
+    return state
+
+
+def write_resume_state(
+    state: ResumeState, *, directory: str | Path | None = None
+) -> Path:
+    path = resume_state_path(state.resume_id, directory=directory)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f".{os.getpid()}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as output:
+            json.dump(state.as_dict(), output, ensure_ascii=True, separators=(",", ":"))
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return path
+
+
+def validate_resume_state(
+    state: ResumeState,
     *,
     stream_id: int,
     total_size: int,
@@ -89,24 +147,23 @@ def validate_resume_metadata(
         raise ValueError("total_size must not be negative")
     if packet_payload_size <= 0:
         raise ValueError("packet_payload_size must be positive")
-    if token.stream_id != stream_id:
+    if state.stream_id != stream_id:
         raise ValueError(
-            "resume token belongs to a different payload: "
-            f"token={token.stream_id:08X}, payload={stream_id:08X}"
+            "resume ID belongs to a different payload: "
+            f"state={state.stream_id:08X}, payload={stream_id:08X}"
+        )
+    if state.packet_payload_size != packet_payload_size:
+        raise ValueError(
+            "resume packet size does not match the selected profile: "
+            f"state={state.packet_payload_size}, selected={packet_payload_size}"
         )
     packet_count = max(1, (total_size + packet_payload_size - 1) // packet_payload_size)
-    if token.next_sequence >= packet_count:
+    if state.next_sequence >= packet_count:
         raise ValueError(
-            f"resume packet {token.next_sequence} is outside {packet_count} packets"
+            f"resume packet {state.next_sequence} is outside {packet_count} packets"
         )
-    expected_bytes = min(token.next_sequence * packet_payload_size, total_size)
-    if token.accepted_bytes != expected_bytes:
+    if state.stream_crc != prefix_crc:
         raise ValueError(
-            "resume token byte position does not match packet size: "
-            f"token={token.accepted_bytes}, expected={expected_bytes}"
-        )
-    if token.stream_crc != prefix_crc:
-        raise ValueError(
-            "resume token prefix CRC does not match the payload: "
-            f"token={token.stream_crc:08X}, payload={prefix_crc:08X}"
+            "resume state prefix CRC does not match the payload: "
+            f"state={state.stream_crc:08X}, payload={prefix_crc:08X}"
         )

@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 import wave
+import zlib
 from pathlib import Path
 
 from kotone.benchmark import benchmark
@@ -13,7 +14,7 @@ from kotone.channel.wav import decode_wav, encode_wav
 from kotone.codec import DecodeError
 from kotone.config import codec_config_for_profile
 from kotone.file_payload import pack_file_payload, try_unpack_file_payload
-from kotone.resume import ResumeToken, validate_resume_data
+from kotone.resume import load_resume_state, validate_resume_state
 from kotone.sender import send_file
 
 DEMO_PROFILES = (
@@ -94,8 +95,8 @@ def _parser() -> argparse.ArgumentParser:
         help="silence after the signal in milliseconds (default: 1000)",
     )
     send_command.add_argument(
-        "--resume-token",
-        help="resume token shown by the receiver",
+        "--resume",
+        help="five-digit resume ID shown by the PC receiver",
     )
     _add_modem_options(send_command, default_profile="a2dp-ofdm-441")
 
@@ -112,9 +113,9 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     encode_command.add_argument(
-        "--resume-token",
+        "--resume",
         help=(
-            "resume token shown by the receiver; validates the original "
+            "five-digit resume ID shown by the PC receiver; validates the original "
             "file and emits only the still-needed packets"
         ),
     )
@@ -236,7 +237,7 @@ def main(argv: list[str] | None = None) -> int:
                 device=args.device,
                 startup_silence_seconds=args.startup_silence_ms / 1_000,
                 tail_silence_seconds=args.tail_silence_ms / 1_000,
-                resume_token=args.resume_token,
+                resume_id=args.resume,
             )
             print(
                 f"Sent stream {result.stream_id:08X} packets "
@@ -246,16 +247,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "encode":
             data = pack_file_payload(args.input.name, args.input.read_bytes())
-            resume = (
-                ResumeToken.parse(args.resume_token)
-                if args.resume_token is not None
-                else None
-            )
+            resume = load_resume_state(args.resume) if args.resume is not None else None
             if resume is not None:
-                validate_resume_data(
+                validate_resume_state(
                     resume,
-                    data,
+                    stream_id=zlib.crc32(data),
+                    total_size=len(data),
                     packet_payload_size=config.packet_payload_size,
+                    prefix_crc=zlib.crc32(data[: resume.accepted_bytes]),
                 )
                 packet_count = max(
                     1,
