@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>5. ファイアウォール導入検証テスト計画書</title>
+<style>
+:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#202020;background:#f7f7f7;color-scheme:light}
+*{box-sizing:border-box}body{margin:0;line-height:1.65}main{max-width:1500px;margin:auto;padding:30px 28px 70px}
+h1{margin:0 0 8px;font-size:clamp(26px,3vw,38px)}h2{margin:40px 0 14px;padding-bottom:8px;border-bottom:2px solid #ccc;font-size:25px}
+h3{margin:28px 0 10px;font-size:19px}p{margin:8px 0 14px}.lead{color:#555}
+.notice{padding:14px 16px;margin:18px 0;border-left:4px solid #777;background:#ededed;color:#444}
+.table-wrap{overflow-x:auto;border:1px solid #ccc;border-radius:10px;background:#fff;margin:12px 0 22px}
+table{width:100%;border-collapse:collapse;min-width:1100px}th,td{padding:9px 11px;border-bottom:1px solid #e4e4e4;text-align:left;vertical-align:top}th{background:#e9e9e9;white-space:nowrap}tr:last-child td{border-bottom:0}
+code{padding:1px 5px;border-radius:4px;background:#ececec;font-family:ui-monospace,Consolas,monospace;font-size:.9em}
+.diagram{min-height:300px;overflow:auto;padding:18px;border:1px solid #ccc;border-radius:12px;background:#fff}.diagram>svg{display:block;width:100%;height:auto;min-width:900px}
+.small{color:#666;font-size:13px}.risk{color:#7b2424;font-weight:600}.pass{color:#315f3b;font-weight:600}
+ul{padding-left:24px}.tag{display:inline-block;padding:2px 7px;margin:1px 2px;border:1px solid #bbb;border-radius:999px;font-size:12px;background:#fafafa}
+@media(max-width:720px){main{padding:22px 14px 44px}.diagram{padding:10px}}
+</style>
+</head>
+<body>
+<main>
+<h1>5. ファイアウォール導入検証テスト計画書</h1>
+<p class="lead">ファイアウォール導入後のAI検査システムについて、テストの目的、環境、確認項目、合否判定基準、結果記録方法を整理する。</p>
+<p class="small">作成日：2026年9月29日</p>
+<div class="notice"><strong>資料の位置付け：</strong>本資料は導入検証のテスト仕様（確認項目と合否判定基準）を定める。担当、日程、Go／No-Go、切戻しの判断は作業一覧を正とし、FWの詳細な設定値・許可ルールはFW設計書および通信マトリクスを正とする。実施時の結果は本資料の「結果記録欄」と別途保存する証跡に記録する。<br>本文中の <code>{…}</code> は、現時点で確定していない値、または実施時に確定する値を表す。確定したら「付録B テスト用パラメータ」の値を更新し、本文の <code>{…}</code> を実際の値に置き換える。</div>
+
+<h2>1. テストの目的</h2>
+<p>ファイアウォール導入およびネットワーク分離後に、AI検査システムの主要機能が正常に動作すること、必要な通信だけが許可され不要な通信が遮断されること、AI検査システムの監視・通知の機能が動作し、システム異常時に工程へ通知されること、導入による性能・通信影響が許容範囲内であることを確認する。</p>
+<p>また、障害発生時に旧ネットワーク経路へ切り戻し、業務を復旧できることを確認する。</p>
+<p>AIモデル自体の精度評価、長期運用時のデータ蓄積量評価、本番期間全体の性能保証、FW機器の恒久障害解析、FWの詳細設定値は対象外とする。</p>
+
+<h2>2. テストの環境</h2>
+<div class="table-wrap"><table><thead><tr><th>項目</th><th>内容</th><th>事前確認</th></tr></thead><tbody>
+<tr><td>ネットワーク構成</td><td>論理FWを導入した構成。透過NATまたは設計書で定義された方式を適用し、NAS・管理PCは工場ネットワーク側の新IPアドレスへ変更する。AI検査クラスタ（AI検査サーバー、データ収集サーバー）のIPは変更しない。</td><td>切替前の旧経路、FW設定バックアップ、切戻し経路、新旧IP対応表、検査サーバーのmount設定バックアップ</td></tr>
+<tr><td>通信制御の単位</td><td>セグメント・IP範囲を基本に通信制限を行う構成（ポート単位の制御は前提とせず、サーバーからの外向き通信は宛先を限定しない）</td><td>制御の適用単位、許可・遮断条件、例外、ログ出力条件</td></tr>
+<tr><td>対象工程</td><td>ACT／ACT-BE、Assy N面、IR_CR、IR_NR（Assy系は工程NAS 8台を共有）</td><td>工程別ロット、工程対応</td></tr>
+<tr><td>検証対象機器</td><td>管理PC（各工程1台）、AI検査サーバー#51～#54（ホストOSのmount設定を含む）、データ収集サーバー#61、工程NAS（ACT／ACT-BE #21～#22、Assy #1021～#1028）、監視・etcd関連サービス</td><td>対象機器のIP、ホスト名、工程対応、mount設定</td></tr>
+<tr><td>検証用データ</td><td>各工程の過去実績データまたは検査用ロット、保存先</td><td>工程別ロット、実行順序、証跡保存先</td></tr>
+<tr><td>監視・記録</td><td>FWログ、Prometheus、Loki、Alertmanager、画面キャプチャ、NAS上の結果ファイル</td><td>ログ閲覧権限、通知先、時刻同期、記録担当</td></tr>
+</tbody></table></div>
+<h2>3. テスト項目</h2>
+<p>PRE-01～PRE-04（事前設定）は、3.1の疎通確認より前に実施する。</p>
+<p><strong>完了期限：</strong>3.1と3.2は、{テスト完了期限} までに完了する。期限までに完了できない場合は、切戻し対応とする（5章）。期限は、切戻しに要する時間（許容復旧時間）、停止期間、ベンダーの対応可能時間を踏まえて、後日決定する。</p>
+<p><strong>実施範囲：</strong>本資料のテストはすべて実施し、区分A（検査ができない）のNGがなく、区分B（検査はでき、追加で設定し直す）のNGは、修正・再テスト済み、または対応方針（担当・期限・再テスト）を決めて残課題としていることを完了条件とする（区分は作業一覧の5.2）。テストはすべてAI検査チームが実施する。ベンダーには、ベンダーが対応できる時間の範囲で立ち会ってもらい、次の優先順で立会いを求める（ベンダーの予定を踏まえて、ベンダーと調整して確定する）。全テストへの立会いが望ましいが、そこまでは指定しない。</p>
+<ul>
+<li>最低限（ベンダーの立会いを求める）：疎通の確認（PRE-01～PRE-04、CONN-01～CONN-09）</li>
+<li>できれば（ベンダーの立会いを求める）：通信制御の確認（CTRL-01～CTRL-02）、AI検査の確認（AI-01～AI-04）、監視・通知の確認（MON-01）</li>
+<li>ベスト（ベンダーの立会いを求める）：性能及び通信影響の確認（PERF-01～PERF-02）まで</li>
+</ul>
+<p>ベンダーの立会いがない時間帯に実施したテストでNGとなり、Firewallの設定・設置に起因する場合は、ベンダーに修正を依頼して再テストする。完了期限までに解消できない場合は、切戻し対応とする（5章）。</p>
+
+<p>操作中の <code>{…}</code>、使用するコマンド（<code>tcpchk</code> など）、通信マトリクスは、末尾の付録A・付録B・付録Cを参照する。</p>
+<h3>3.0 事前設定（NAS確認・mount変更・コンテナ再起動）</h3>
+<p><strong>目的：</strong>NASの新IPに合わせて、AI検査サーバーのmount設定を変更し、etcd、検査コンテナ・vis_conなどを再起動して、3.1の疎通確認（ポート確認）ができる状態にする。</p>
+<p><strong>順序：</strong>NASが新IPでアクセスできること（PRE-01）→ mount設定の変更（PRE-02）→ etcdの起動（PRE-03）→ 検査コンテナ・vis_conなどの起動（PRE-04）。ポートはコンテナの起動後でないと確認できないため、疎通確認（3.1）は最後に行う。</p>
+<p><strong>NGの場合：</strong>PRE-01でNASに到達できない場合は、Firewall・ネットワーク設定の調整（ベンダー・下原氏）を行い、再確認する。PRE-02～PRE-04のNGは、{コンテナ起動・停止手順書} に従って再実施、またはバックアップから復元する。いずれも検査ができないNG（作業一覧の5.2の区分A）であり、完了期限までに解消できない場合は、切戻し対応とする（5章）。</p>
+<div class="table-wrap"><table><thead><tr><th>テスト番号</th><th>テスト対象</th><th>操作</th><th>期待結果と合否判定基準</th><th>結果記録欄</th><th>備考</th></tr></thead><tbody>
+<tr><td>PRE-01</td><td>NASの新IPへの到達確認</td><td>AI検査サーバー#51～#54のそれぞれで、次を実行する。<br>(1) <code>tcpchk {NAS新IPアドレス} 445</code>（全NAS分：ACT／ACT-BE 2台、Assy 8台）<br>(2) <code>ping -c 5 {NAS新IPアドレス}</code>（ICMPが許可される場合のみ）</td><td>全NASに対して、(1)が <code>rc=0</code> であること。(2)は許可される場合のみ判定対象とし、パケットロス0%であること。到達できないNASがある場合はNGとし、PRE-02に進まない。</td><td>判定：□OK □NG<br>実施者：</td><td>サーバー別・NAS別に結果を記録（4台×10台）</td></tr>
+<tr><td>PRE-02</td><td>mount設定の変更</td><td>AI検査サーバー#51～#54のそれぞれで、{composeディレクトリ} に移動して次を実行する。<br>(1) <code>cp -p {mount設定ファイル} {mount設定バックアップ}</code><br>(2) {コンテナ起動・停止手順書} に従ってコンテナを停止し、<code>docker compose ps</code> で全コンテナが停止していることを確認する。<br>(3) {mount設定ファイル} のNASのIPアドレスを新IPへ更新し、既存のmountを <code>umount</code> で解除して、<code>mount -a</code> を実行する。<br>(4) <code>diff {mount設定バックアップ} {mount設定ファイル}</code> と <code>findmnt {mountポイント}</code> を実行する。</td><td>(2)で全コンテナが停止していること。(4)の差分がNASのIPアドレスのみで、マウントポイントに変更がなく、全NASが新IPでmountされていること。いずれかが満たされない場合はNGとし、バックアップから復元する。</td><td>判定：□OK □NG<br>新IP：<br>実施者：<br>コンテナ停止：</td><td>設定の差分、mountの出力、コンテナの停止時刻を保存</td></tr>
+<tr><td>PRE-03</td><td>etcdの起動</td><td>AI検査サーバー#51～#54のそれぞれで、{コンテナ起動・停止手順書} に従ってetcdを起動する。</td><td>手順書に記載の手順どおりに起動し、手順書に定める起動確認が完了すること。起動確認が完了しない場合はNGとし、切戻し判断を行う。</td><td>判定：□OK □NG<br>実施者：</td><td>手順書の確認結果とetcdの起動時刻を保存</td></tr>
+<tr><td>PRE-04</td><td>検査コンテナ・vis_conなどの起動</td><td>AI検査サーバー#51～#54のそれぞれで、{コンテナ起動・停止手順書} に従って、検査コンテナ・vis_conなどを起動する。</td><td>手順書に定める確認が完了し、全コンテナが起動していること。満たされない場合はNG。</td><td>判定：□OK □NG<br>実施者：<br>コンテナ起動：</td><td>手順書の確認結果とコンテナの起動時刻を保存</td></tr>
+</tbody></table></div>
+<h3>3.1 基本疎通・通信制限</h3>
+<p><strong>目的：</strong>各通信の疎通が取れていること、基礎的な通信制御が設定できていること。あわせて、この結果から、Firewallを受領できるかを判断する。</p>
+<p><strong>NGの場合：</strong>作業一覧の5.2の区分に従う。Firewallの設定・設置に起因するものは、ベンダーと修正の調整を行い、再テストする。</p>
+<ul>
+<li>検査ができないNG（区分A：CONN-01のNASへの疎通、CONN-03の疎通、CONN-06、CONN-07）：完了期限までに解消できない場合は、切戻し対応とする（5章）。</li>
+<li>検査はでき、追加で設定し直すNG（区分B：上記以外のCONN、CTRL-01～CTRL-02）：切り戻さずに設定を修正して再テストする。当日中に解消できない場合は、対応方針（担当・期限・再テスト）を決めて残課題とする。ただし、CTRL-02で許可範囲外から到達できる（遮断漏れ）場合は、当日中の修正を原則とする。</li>
+</ul>
+<ul>
+<li>疎通の確認（CONN-01～CONN-09）：サーバー、管理PC、NAS、iLO、社内基幹・インターネット、Grafana、etcd、監視の通信が取れること。最初の接続確認（CONN-01～CONN-04）は、Firewall設置の受領確認を兼ねる。</li>
+<li>通信制御の確認（CTRL-01～CTRL-02）：セグメント・IP範囲による許可・遮断が設計どおりに働くこと。</li>
+</ul>
+<div class="table-wrap"><table><thead><tr><th>テスト番号</th><th>テスト対象</th><th>操作</th><th>期待結果と合否判定基準</th><th>結果記録欄</th><th>備考</th></tr></thead><tbody>
+<tr><td>CONN-01</td><td>サーバー → 管理PC・NAS</td><td>AI検査サーバー#51～#54とデータ収集サーバー#61のそれぞれで、次を実行する（管理PCは各工程の1台ずつ）。<br>(1) <code>ping -c 20 {管理PC新IPアドレス}</code><br>(2) <code>tcpchk {管理PC新IPアドレス} {Windows Exporterのポート}</code>（データ収集サーバーからのWindows Exporter）<br>(3) <code>ping -c 20 {NAS新IPアドレス}</code><br>(4) <code>tcpchk {NAS新IPアドレス} 445</code></td><td>通信プロトコルの設計が未定のため、管理PCへは(1)または(2)、NASへは(3)または(4)の、いずれかが成功すれば疎通ありとする。pingを実施した場合は、パケットロス0%で、平均応答時間が {許容遅延} 以内であること。疎通なし、または遅延超過はNG。</td><td>判定：□OK □NG<br>実施者：</td><td>サーバー別（全5台）に、送信先、方式、パケットロス率、平均応答時間、<code>rc</code>を記録</td></tr>
+<tr><td>CONN-02</td><td>サーバー → 社内基幹・インターネット</td><td>AI検査サーバー#51～#54とデータ収集サーバー#61のそれぞれ（全5台）から、次を実行する。<br>(1) 社内DNS：<code>getent hosts {GitLabホスト}</code>（グローバルなホスト名は社内DNSで引けない可能性があるため、ここでは社内のホスト名のみ確認する）<br>(2) NTP：<code>timedatectl show -p NTPSynchronized --value</code><br>(3) 社内：<code>curl -s -o /dev/null -w '%{http_code}\n' --max-time 5 https://{GitLabホスト}</code>、同じく <code>https://{WSUSホスト}</code>、SMTP：<code>tcpchk {SMTPサーバー} 25</code><br>(4) プロキシ：<code>tcpchk {プロキシサーバー} {プロキシポート}</code><br>(5) インターネット（プロキシ経由）：<code>echo $HTTPS_PROXY</code> が {プロキシサーバー}:{プロキシポート} であることを確認し、<code>curl -s -o /dev/null -w '%{http_code}\n' --max-time 5 https://{S3バケット}.s3.amazonaws.com/</code>（環境変数のプロキシ設定に従う）、同じく <code>https://pypi.org</code>、<code>https://registry.npmjs.org</code>。<code>apt update</code>（プロキシ設定済みの前提）<br>(6) AWS（DocumentDB）：<code>tcpchk {DocumentDBエンドポイント} 27017</code>。名前解決できない場合は <code>tcpchk {DocumentDBのIPアドレス} 27017</code></td><td>(1)が名前解決に成功し、(2)が <code>yes</code>、社内基幹への(3)、またはインターネットへの(5)（プロキシ経由）のいずれかで、応答（200、301、302、403のいずれか）が返り接続が確認できること。(4)(6)は、該当する経路を使う場合に <code>rc=0</code> であること。外向き通信は宛先を限定しないため、遮断の確認は行わない。必要な外向き通信の失敗はNG。</td><td>判定：□OK □NG<br>実施者：</td><td>サーバー別（全5台）に、宛先、経路（直接／プロキシ経由）、プロトコル、コマンドの出力、FWログを記録</td></tr>
+<tr><td>CONN-03</td><td>管理PC → サーバー・NAS</td><td>各工程（ACT／ACT-BE、Assy N面、IR_CR、IR_NR）の管理PC 1台ずつ（{管理PC新IPアドレス}）から、次を実行する。<br>(1) <code>ping -n 20 {AI検査サーバーIPアドレス}</code>、<code>ping -n 20 {データ収集サーバーIPアドレス}</code>、<code>ping -n 20 {NAS新IPアドレス}</code><br>(2) SSH：<code>Test-NetConnection {AI検査サーバーIPアドレス} -Port 22</code>、続けて <code>ssh {AI検査サーバーIPアドレス}</code> でログインする。<br>(3) <code>Test-NetConnection {NAS新IPアドレス} -Port 445</code>、続けて <code>dir \\{NAS新IPアドレス}\{共有名}</code></td><td>通信プロトコルの設計が未定のため、各宛先（AI検査サーバー、データ収集サーバー、NAS）について、(1)のpingまたは(2)(3)の対応するTCP確認のいずれかが成功すれば疎通ありとする。(2)のSSHログインが成功すること。pingを実施した場合は、パケットロス0%で、平均応答時間が {許容遅延} 以内であること。疎通なし、または遅延超過はNG。(3)のdirは共有アクセスの参考として記録する（判定はCONN-06）。管理PCのアプリ（検査指示など）の通信は、実際の検査（AI-01）で確認するため、ここでは確認しない。</td><td>判定：□OK □NG<br>実施者：</td><td>工程別（管理PC 1台ずつ）に、送信先、方式、パケットロス率、平均応答時間、結果を記録</td></tr>
+<tr><td>CONN-04</td><td>基幹ネットワーク側 → iLO</td><td>基幹ネットワーク側の端末 {基幹側確認元端末IPアドレス} のブラウザで、<code>https://{iLOアドレス}/</code> を開く（全サーバー分：#51～#54、#61）。</td><td>全サーバーのiLOの画面が表示されること（iLOは基幹ネットワークに残すため、Firewall導入後も接続できる）。接続不可はNG。サーバー本体への接続が遮断されることは、CTRL-02で確認する。</td><td>判定：□OK □NG<br>実施者：</td><td>確認元端末、接続先、画面キャプチャを保存</td></tr>
+<tr><td>CONN-05</td><td>管理PC → Grafana</td><td>各工程の管理PC 1台ずつ（{管理PC新IPアドレス}）のブラウザで、<code>http://{データ収集サーバーIPアドレス}:3000</code>（Grafana）を開く。</td><td>Grafanaのダッシュボードが表示され、最新のメトリクスが表示されること。画面表示不可、エラー表示はNG。</td><td>判定：□OK □NG<br>実施者：</td><td>工程別に画面キャプチャを保存</td></tr>
+<tr><td>CONN-06</td><td>AI検査サーバー → 工程NAS</td><td>AI検査サーバー#51～#54のそれぞれで、次を実行する。<br>(1) <code>findmnt {mountポイント}</code> で、全工程分（ACT／ACT-BE、Assy）のNASがmountされていることを確認する。<br>(2) 工程NASごとに、<code>ls -l {mountポイント}/{工程用サブパス}</code> でファイル一覧を取得する。<br>(3) テスト用ディレクトリに <code>echo test &gt; {mountポイント}/{テスト用ディレクトリ}/fw_test.txt</code>、<code>cat</code>、<code>rm</code> を順に実行する。</td><td>4台とも、全NAS（ACT／ACT-BE 2台、Assy 8台）が新IPでmountされ、一覧取得と書込み・読出し・削除が成功すること。アクセス不可、mount欠落、書込み失敗はNG。</td><td>判定：□OK □NG<br>実施者：</td><td>サーバー別・NAS別に結果を記録（4台×10台の組合せ）</td></tr>
+<tr><td>CONN-07</td><td>サーバー間etcd通信</td><td>AI検査サーバー#51～#54のそれぞれで、{composeディレクトリ} に移動して次を実行する。<br><code>docker compose exec {etcdサービス名} etcdctl --endpoints={etcdエンドポイント} {etcd TLSオプション} get "" --prefix --keys-only</code></td><td>4台とも、エラー・タイムアウトなく、etcdのキーの一覧がクラスタから取得できること。取得できない場合はNG。</td><td>判定：□OK □NG<br>実施者：</td><td>サーバー別に出力を保存</td></tr>
+<tr><td>CONN-08</td><td>監視・ログ通信</td><td>データ収集サーバー（{データ収集サーバーIPアドレス}）で次を実行する。<br>(1) <code>curl -s http://{データ収集サーバーIPアドレス}:9090/api/v1/targets | grep -o '"health":"up"' | wc -l</code>（AI検査サーバーはnode_exporterの9100）<br>(2) <code>curl -s http://{データ収集サーバーIPアドレス}:3100/ready</code><br>(3) 管理PCのブラウザで Grafana（<code>http://{データ収集サーバーIPアドレス}:3000</code>）を開き、Promtail経由のログが最新の時刻まで表示されること（各AI検査サーバー）。<br>(4) <code>curl -s -X POST -H 'Content-Type: application/json' -d '[{"labels":{"alertname":"FirewallTest"}}]' http://{データ収集サーバーIPアドレス}:9093/api/v2/alerts</code></td><td>(1)は {監視対象数} と一致すること。(2)は <code>ready</code> が返ること。(3)は直近5分以内のログが全サーバー分表示されること。(4)は {通知先メールアドレス} に通知が到達すること。欠損・未達はNG。</td><td>判定：□OK □NG<br>実施者：</td><td>画面キャプチャ、通知メール、通知履歴を保存</td></tr>
+<tr><td>CONN-09</td><td>NAS・管理PCの新IP疎通</td><td>(1) 管理PC（{管理PC新IPアドレス}）から、CONN-03、CONN-05の操作を行う。<br>(2) AI検査サーバーで <code>findmnt -n -o SOURCE,TARGET {mountポイント}</code> を実行し、mount元が {NAS新IPアドレス} であることと、<code>ls {mountポイント}/{工程用サブパス}</code> が成功することを確認する。<br>(3) 旧IP残りの確認：AI検査サーバーで <code>ss -tn | grep {NAS旧IPアドレス}</code>、<code>grep -r {NAS旧IPアドレス} {mount設定ファイル}</code> を実行し、FWログで旧IP宛の通信を確認する。<br>(4) etcdに保存された設定に旧IPが残っていないことを確認する：<code>docker compose exec {etcdサービス名} etcdctl --endpoints={etcdエンドポイント} {etcd TLSオプション} get "" --prefix | grep -c -e {NAS旧IPアドレス} -e {管理PC旧IPアドレス}</code></td><td>(1)(2)が成功すること。(3)は0件（旧IP宛のセッション、設定ファイル内の記述、FWログの通信のいずれもなし）、(4)は <code>0</code>（etcd内に旧IPの記述がない。調査の結果、更新が必要と分かった場合は、更新後に確認する）であること。いずれかが満たされない場合はNG。</td><td>判定：□OK □NG<br>新IP：<br>実施者：</td><td>新旧IP、送信元・宛先、方式、結果を記録</td></tr>
+<tr><td>CTRL-01</td><td>FW通信制御の適用単位</td><td>(1) FW設計書から許可・遮断ルールを取得し、送信元・宛先のセグメント・IP範囲に整理する。<br>(2) 許可範囲内の端末 {許可範囲内テスト端末IPアドレス} から、<code>tcpchk {AI検査サーバーIPアドレス} 443</code> と、稼働していないポート（例：<code>tcpchk {AI検査サーバーIPアドレス} 8999</code>）を実行する。<br>(3) 許可範囲外の端末 {許可範囲外テスト端末IPアドレス} から同じ宛先・ポートを実行する。</td><td>(2) 443は <code>rc=0</code>（接続成功）、稼働していないポートは <code>rc=1</code> で数秒以内（接続拒否）となり、FWで遮断されない（制御がポートでなくIP範囲単位であること）。(3) いずれも <code>rc=124</code>（タイムアウト）となり、FWログに遮断が記録されること。ルールの適用単位が設計書で説明でき、実結果と一致すること。一致しない場合、または必要通信を誤遮断した場合はNG。</td><td>判定：□OK □NG<br>実施者：</td><td>実行時刻、送信元・宛先IP、<code>rc</code>と経過秒、FWログ（{FWログ確認先}）を記録</td></tr>
+<tr><td>CTRL-02</td><td>許可されていない通信</td><td>許可範囲外の端末 {許可範囲外テスト端末IPアドレス} から、次を実行する。<br><code>tcpchk {AI検査サーバーIPアドレス} 22</code>／<code>2379</code>／<code>443</code><br><code>tcpchk {データ収集サーバーIPアドレス} 9090</code>／<code>3100</code>／<code>3000</code>／<code>9093</code><br><code>tcpchk {NAS新IPアドレス} 445</code><br>工場ネットワーク側の許可対象外機器から {AI検査サーバーIPアドレス} へ同様に実行する。<br>基幹ネットワーク側の端末 {基幹側確認元端末IPアドレス} から、<code>tcpchk {AI検査サーバーIPアドレス} 22</code>／<code>443</code>、<code>tcpchk {データ収集サーバーIPアドレス} 443</code>／<code>3000</code> を実行する（基幹側からサーバーに到達できないことの確認）。</td><td>すべて <code>rc=124</code>（タイムアウト）となり、FWログに遮断が記録されること。<code>rc=0</code>（接続成功）はNG。業務に必要な通信を誤遮断した場合もNG。</td><td>判定：□OK □NG<br>実施者：</td><td>試行条件（送信元・宛先・ポート）とFWログを保存</td></tr>
+</tbody></table></div>
+<h3>3.2 AI検査の動作確認</h3>
+<p><strong>目的：</strong>Firewall導入後も、AI検査システムが動作すること。検査指示から、検査処理時間（導入前から劣化していないこと）、AI判定・結果保存、結果の可視化までを、各工程で確認する。</p>
+<p><strong>進め方：</strong>先行して着手する工程（{先行着手工程}）を決め、その1工程の検査を通しで実施して、早い時間にFirewallそのものに問題がないことを見極める。問題がなければ、残りの工程は並行実施してもよい。</p>
+<p><strong>判定：</strong>AI-01～AI-04がすべて合格すれば、性能面を含めて、ほぼFirewallに問題がないことを見極められる（処理時間はAI-02で、検査の中で確認する）。最終的な判断は、性能及び通信影響の確認（PERF）を含む全テストの結果（6章の完了条件）をもって行う。ベンダーの立会いは、3章の「実施範囲」の優先順に従う。</p>
+<p><strong>NGの場合：</strong>作業一覧の5.2の区分に従う。AI-01・AI-03のNG（区分A：検査ができない）は、切戻し対応とする（5章）。AI-04のNG（区分B：可視化の表示の乱れ・遅延など）は、切り戻さずに設定を修正して再テストし、当日中に解消できない場合は対応方針を決めて残課題とする。AI-02のNG（処理時間の超過）は、影響工程と影響の大きさを各工程担当と確認し、生産継続に支障がある場合は区分A、ない場合は区分Bとして扱う。完了期限までに完了できない場合は、切戻し対応とする。</p>
+<div class="table-wrap"><table><thead><tr><th>テスト番号</th><th>テスト対象</th><th>操作</th><th>期待結果と合否判定基準</th><th>結果記録欄</th><th>備考</th></tr></thead><tbody>
+<tr><td>AI-01</td><td>AI検査実行指示</td><td>管理PCの <code>insp_app</code> で、ACT／ACT-BE、Assy N面、IR_CR、IR_NRの各工程ごとに {検査用ロットID}（工程別）を指定し、検査開始を指示する。</td><td>各工程とも、指示が受理されて検査が「実行中」になり、完了まで進むこと。受付エラー、対象不一致はNG。管理PCのアプリはetcd（2379）から情報を取得して各サーバー（443）へ指示を出すため、検査が実行できれば、これらの通信も確認できたことになる。</td><td>判定：□OK □NG<br>実施者：</td><td>工程別に、検査ID・開始時刻を記録（工程の並行実施が可能）</td></tr>
+<tr><td>AI-02</td><td>検査処理時間</td><td>AI-01の各工程の検査（導入前に計測した同一の {検査用ロットID}）について、検査開始から完了までの時間を計測する。</td><td>導入前実績 {導入前処理時間} に対する差分が {許容劣化率} 以内で、検査完了までの時間が {許容処理時間} 以内であること。許容値を超過した場合はNG。</td><td>判定：□OK □NG<br>実施者：<br>導入前：<br>許容値：<br>導入後：</td><td>測定条件（ロットID、時刻、サーバー）と数値を記録</td></tr>
+<tr><td>AI-03</td><td>AI判定・結果保存</td><td>各工程の検査完了後、ビューワーアプリ（{ビューワーアプリ}）で、AI-01の検査結果を開く。</td><td>各工程とも、ビューワーアプリで検査結果を開くことができること。開けない場合はNG。</td><td>判定：□OK □NG<br>実施者：</td><td>工程別に画面キャプチャを保存</td></tr>
+<tr><td>AI-04</td><td>結果可視化</td><td>管理PCで <code>{vis_con URL}</code> を開き、各工程の検査IDについて状態、結果、集計、結果リンクを表示する。</td><td>検査IDの最新の状態・結果・集計が表示され、結果リンクから画像・結果を開けること。保存から表示までの遅延が {許容遅延} 以内であること。表示遅延・欠落はNG。</td><td>判定：□OK □NG<br>実施者：</td><td>工程別に画面キャプチャを保存</td></tr>
+</tbody></table></div>
+<h3>3.3 監視・通知の確認</h3>
+<p><strong>目的：</strong>Firewall導入後も、AI検査システムが持つ監視・通知の機能（Prometheus、Alertmanager）が、システムの異常を検知し、工程へ通知できること。CONN-08では監視・通知の通信経路を確認し、本節では、実際に異常を起こして、検知から工程への通知までが動作することを確認する。</p>
+<p><strong>進め方：</strong>MON-01は、テスト用のデータで検査を意図的に失敗させるため、AI-01～AI-04で検査が正常にできることを確認した後に行う。AI-02、PERF-01の計測中は避ける。失敗させた検査の結果は、テスト用として記録し、工程の実績と混ざらないようにする。</p>
+<p><strong>NGの場合：</strong>検査の実施には影響しないため（区分B）、切り戻さず、監視・通知またはFWの設定を修正して再テストする。完了期限までに解消できない場合は、影響・暫定対応・担当・期限を残課題として記録し、関係者で合意する。</p>
+<div class="table-wrap"><table><thead><tr><th>テスト番号</th><th>テスト対象</th><th>操作</th><th>期待結果と合否判定基準</th><th>結果記録欄</th><th>備考</th></tr></thead><tbody>
+<tr><td>MON-01</td><td>検査失敗の検知と工程への通知（発報・復旧）</td><td>(1) 管理PCの <code>insp_app</code> で、{MON-01対象工程} について、{検査失敗用テストデータ} を指定して検査開始を指示し、検査を失敗させる（指示時刻を記録する）。<br>(2) データ収集サーバーで <code>curl -s 'http://{データ収集サーバーIPアドレス}:9093/api/v2/alerts?active=true'</code> を実行し、{検査失敗アラート名} が発生していることを確認する。<br>(3) {工程の通知先メールアドレス} で、発報の通知メールを確認する。<br>(4) 同じ工程で、正常な {検査用ロットID} を指定して検査を実行し、正常に完了することと、アラートが解消したこと（(2)の出力から消えること）、{工程の通知先メールアドレス} で復旧の通知メールを確認する。</td><td>(1)で検査が「失敗」として扱われ、{アラート検知許容時間} 以内に、(2)で {検査失敗アラート名} が発生し、(3)の通知メールが対象工程の通知先に到達すること。(4)で、正常な検査が完了し、アラートが解消して、復旧の通知メールが到達すること（復旧通知を設定している場合）。検査失敗が検知されない、通知メールが届かない、許容時間を超過した、または(4)で正常な検査ができない場合はNG。</td><td>判定：□OK □NG<br>実施者：<br>対象工程：<br>指示時刻：<br>発報時刻：<br>通知到達時刻：<br>復旧通知時刻：</td><td>検査の状態、アラートの出力、通知メール（発報・復旧）を保存。工程ごとに通知先が異なる場合は、全工程で実施する</td></tr>
+</tbody></table></div>
+<h2>4. 性能及び通信影響の確認</h2>
+<p><strong>目的：</strong>同時実行時に、検査ログにエラーがなく、検査が止まらないこと。検査以外のNAS利用ツールなどに影響がないこと。</p>
+<p><strong>実施方針：</strong>完了の必須条件とする。ベンダーの立会いの優先順ではベストの位置付けであり、立会いがない場合も実施する。</p>
+<p><strong>NGの場合：</strong>作業一覧の5.2の区分に従う。PERF-01は、検査が止まった場合は区分A、検査は止まらず検査ログにエラーのみの場合は区分Bとする。PERF-02は、影響工程と影響の大きさを各工程担当と確認し、生産継続に支障がある場合は区分A、ない場合は区分Bとして扱う（区分の基準は7章の未決事項）。区分Aが解消できない場合は、切戻し対応とする（5章）。区分Bは、切り戻さずに設定を修正して再テストし、解消できない場合は対応方針（担当・期限・再テスト）を決めて残課題とする。</p>
+<div class="table-wrap"><table><thead><tr><th>テスト番号</th><th>テスト対象</th><th>操作</th><th>期待結果と合否判定基準</th><th>結果記録欄</th><th>備考</th></tr></thead><tbody>
+<tr><td>PERF-01</td><td>同時実行負荷</td><td>全工程（ACT／ACT-BE、Assy N面、IR_CR、IR_NR）から並行して検査指示を出し、完了後に、{検査ログの場所} で検査ログを確認する。</td><td>すべての指示が正常に完了し、検査が途中で止まらないこと。検査ログに、エラー（通信エラー、タイムアウト、再試行）がないこと。検査が止まった場合はNG（区分A）、検査は止まらずエラーのみの場合はNG（区分B）。</td><td>判定：□OK □NG<br>実施者：</td><td>検査ログの該当部分を保存</td></tr>
+<tr><td>PERF-02</td><td>NAS接続影響</td><td>{NAS利用ツール一覧} の各ツール・アプリについて、切替前後で次を実行する。<br>(1) NASへのアクセス（読出し・書込み）を行い、ツールの実行結果・ログを確認する。<br>(2) 検証用ファイルの <code>sha256sum</code> を切替前後で比較する。</td><td>対象ツールの実行結果・ログにエラーがなく、読出し・書込みが正常に完了し、ファイルが破損していない（ハッシュが一致する）こと。影響がある場合はNGとし、範囲と回避策を記録する。</td><td>判定：□OK □NG<br>実施者：</td><td>利用ツール一覧と結果を保存</td></tr>
+</tbody></table></div>
+<h2>5. 障害発生時の切り戻し確認</h2>
+<p><strong>目的：</strong>障害時に旧ネットワーク経路へ戻して業務を復旧できること、復旧の所要時間が許容時間内に収まること。切戻しの作業そのもの（Firewallの接続を外す、IPを戻す、mount設定を復元する、コンテナを停止・起動する）は、{切戻し手順書} に従う。ここでは、切り戻した後に何を確認するかを定める。</p>
+<p><strong>実施条件：</strong>本章のテストは、切戻しを実施した場合にのみ行う。切戻しを行わなかった場合は実施しない（6章の完了条件の対象外）。切戻しを行った場合は、本章のテストがすべてOKとなることで、導入前の状態に復旧したと判断する。</p>
+<div class="table-wrap"><table><thead><tr><th>テスト番号</th><th>テスト対象</th><th>操作</th><th>期待結果と合否判定基準</th><th>結果記録欄</th><th>備考</th></tr></thead><tbody>
+<tr><td>RB-01</td><td>切戻し後の到達確認（基幹ネットワークから）</td><td>{切戻し手順書} に従って切り戻した後（開始時刻を記録する）、基幹ネットワーク側の端末 {基幹側確認元端末IPアドレス} から、<code>tcpchk {AI検査サーバーIPアドレス} 22</code>、<code>tcpchk {NAS旧IPアドレス} 445</code> を実行する。</td><td>両方が <code>rc=0</code> となり、基幹ネットワークからサーバーと旧IPのNASに到達できること（Firewallの経路を外し、NASのIPが旧IPに戻っていること）。到達できない場合はNG。</td><td>判定：□OK □NG<br>実施者：<br>切戻し開始：</td><td>切戻しの開始時刻と、出力を記録</td></tr>
+<tr><td>RB-02</td><td>切戻し後の疎通・NAS・etcdの復旧確認</td><td>AI検査サーバー#51～#54とデータ収集サーバー#61、管理PCで、CONN-01、CONN-03、CONN-06、CONN-07、CONN-08の操作を実行する。宛先のNAS・管理PCのIPは、旧IP（{NAS旧IPアドレス}、{管理PC旧IPアドレス}）に読み替える。</td><td>各操作が、導入前相当の状態で成功すること。特に、NASが旧IPで再マウントされていること（CONN-06）、etcdのデータがクラスタから取得できること（CONN-07）。いずれかが失敗した場合はNG。</td><td>判定：□OK □NG<br>実施者：</td><td>操作ごとの結果を記録</td></tr>
+<tr><td>RB-03</td><td>切戻し後のAI検査E2E</td><td>切戻し後に、各工程（ACT／ACT-BE、Assy N面、IR_CR、IR_NR）でAI-01、AI-03、AI-04の操作を行う。</td><td>各工程で、検査指示、推論、結果保存、可視化が正常に完了すること。いずれかが失敗した場合はNG。あわせて、RB-01の開始からここまでの所要時間が {許容復旧時間} 以内であること。</td><td>判定：□OK □NG<br>実施者：</td><td>導入前状態との差分と、切戻し全体の所要時間（コンテナの停止・起動を含む）を記録</td></tr>
+</tbody></table></div>
+<h2>6. テスト結果の記録方法</h2>
+<ul>
+<li>各テストケースの「結果記録欄」に、実施者、判定（OK／NG）を記入する。</li>
+<li>NGの場合は、区分（作業一覧の5.2の区分A／B）、発生時刻、対象機器、通信元・先、エラーメッセージ、暫定対応、再試験条件を備考へ記録する。</li>
+<li>画面キャプチャ、FWログ、監視ログ、検査結果ファイル、NAS上の証跡、コマンドの出力、IP・mount設定の変更前後の内容をテスト番号と紐付けて保存する。</li>
+<li>性能のテスト（AI-02）と切戻しのテストでは、導入前値、許容値、導入後値、復旧時間を数値で記録する。</li>
+<li>3章・4章のテストで、区分A（検査ができない）のNGがなく、区分B（検査はでき、追加で設定し直す）のNGは、修正・再テスト済み、または対応方針（担当・期限・再テスト）を決めて残課題としていることを確認したうえで完了とする（区分は作業一覧の5.2）。</li>
+<li>5章の切戻し確認は、切戻しを実施した場合にのみ行う。その場合は、5章のテストがすべてOKとなったことをもって復旧完了とし、切戻しの理由（NGとなったテスト番号）とあわせて記録する。</li>
+</ul>
+
+<h2>7. 未決事項</h2>
+<div class="table-wrap"><table><thead><tr><th>未決事項</th><th>テストへの影響</th><th>決定担当者</th><th>決定予定日</th></tr></thead><tbody>
+<tr><td>テストの実施環境・タイミング（リハーサル環境か、本番適用の前後か）、テスト環境でのAI検査クラスタの再現可否</td><td>全テストの実施条件、切戻しテストの可否に影響</td><td>中村氏・下原氏</td><td>テスト実施前</td></tr>
+<tr><td>{…} で表記した値（付録Bのパラメータ表）の確定</td><td>各テストの操作・期待結果に影響</td><td>中村氏・下原氏・AI検査チーム・各工程担当</td><td>テスト実施前</td></tr>
+<tr><td>各工程で使用する検査用ロット</td><td>AI-01～AI-04の実施条件に影響</td><td>各工程担当・AI検査チーム</td><td>テスト実施前</td></tr>
+<tr><td>NAS・管理PCの変更後IPアドレス</td><td>CONN-09、PRE-01、PRE-02、通信マトリクスの宛先・送信元に影響</td><td>中村氏・下原氏・AI検査チーム・各工程担当</td><td>テスト実施前</td></tr>
+<tr><td>性能の許容処理時間・許容遅延・許容劣化率の閾値</td><td>AI-02、CONN-01、CONN-03、AI-04の合否判定に影響</td><td>各工程担当・AI検査チーム</td><td>テスト実施前</td></tr>
+<tr><td>工場側へのICMP許可を含む通信プロトコルの設計（未定のため、CONN-01、CONN-03はpingまたはTCP接続のいずれかで判定）</td><td>CONN-01、CONN-03の疎通確認方法と合否判定に影響</td><td>下原氏</td><td>設定投入前</td></tr>
+<tr><td>社外通信の経路（プロキシ経由でのみ名前解決・接続できる可能性）とプロキシサーバーのアドレス</td><td>CONN-02、通信マトリクスM-14に影響</td><td>下原氏</td><td>テスト実施前</td></tr>
+<tr><td>外向き通信の許可範囲（宛先を限定しない方針の確認）</td><td>CONN-02の確認対象と遮断判定に影響</td><td>下原氏</td><td>設定投入前</td></tr>
+<tr><td>管理PCへのWindows Exporterの導入時期と待受ポート</td><td>CONN-01の(2)、通信マトリクスM-15に影響</td><td>AI検査チーム・下原氏</td><td>テスト実施前</td></tr>
+<tr><td>検査指示アプリ（insp_app／op_app）が動作する管理PC（ACT系、Assy系それぞれ同一PCか、別のPCか）</td><td>CONN-01、CONN-03、CONN-05、CONN-09、AI-01～AI-04で使用する管理PCに影響</td><td>中村氏・下原氏・AI検査チーム・各工程担当</td><td>テスト実施前</td></tr>
+<tr><td>基幹ネットワーク側の確認元端末</td><td>CONN-04、CTRL-02の送信元、経路、証跡に影響</td><td>下原氏・AI検査チーム・中村氏</td><td>テスト実施前</td></tr>
+<tr><td>FW通信制御の適用単位（セグメント・IP範囲を基本とする方針の確定）</td><td>CTRL-01の試行条件、期待結果、合否判定に影響</td><td>下原氏</td><td>設定投入前</td></tr>
+<tr><td>NASを利用する検査以外のツール・アプリ一覧</td><td>PERF-02の影響範囲に影響</td><td>若林氏・各工程担当</td><td>切替前</td></tr>
+<tr><td>ベンダーが立ち会う範囲の優先順（通信制御の確認CTRL-01～CTRL-02の位置付けを含む）、ベンダーの予定との調整</td><td>3章の実施範囲、当日の実施順序、ベンダーの立会い範囲に影響</td><td>中村氏・下原氏（ベンダーと調整）</td><td>後日決定</td></tr>
+<tr><td>etcdに保存された設定に、変更前のIP（NAS、管理PC）が含まれるか（調査）。含まれる場合の更新方法</td><td>CONN-09の(4)、PRE-03、RB-02（切戻し時の戻し方）に影響</td><td>AI検査チーム</td><td>テスト実施前</td></tr>
+<tr><td>ベンダーの対応可能時間（当日中のみか、翌日まで対応できるか）</td><td>3.1の修正調整に使える時間、完了期限に影響</td><td>中村氏・下原氏</td><td>後日決定</td></tr>
+<tr><td>3.2で先行して着手する工程（{先行着手工程}）</td><td>Firewallの問題の早期の見極め、3.2の実施順序に影響</td><td>AI検査チーム・各工程担当</td><td>テスト実施前</td></tr>
+<tr><td>3.1・3.2の完了期限（{テスト完了期限}）</td><td>3章の実施順序、切戻し判断の時刻に影響</td><td>中村氏・下原氏・工程側技術部長</td><td>本番検証前</td></tr>
+<tr><td>許容復旧時間の数値（停止期間の範囲内）</td><td>RB-03の合否判定に影響</td><td>工程側技術部長・中村氏</td><td>本番検証前</td></tr>
+<tr><td>テスト時の正式な通知先</td><td>結果連絡と異常時対応、CONN-08の通知到達の確認に影響</td><td>中村氏・工程側技術部長・各工程担当</td><td>本番適用前</td></tr>
+<tr><td>AI検査システムの監視のアラート条件（検査失敗のアラート名、検知までの許容時間、復旧通知の有無）、工程の通知先メールアドレス、検査を失敗させるテスト用データとその扱い（工程の実績と混ざらないこと）</td><td>MON-01の操作・合否判定に影響</td><td>中村氏・工程側技術部長・各工程担当（アラート条件・通知先）、AI検査チーム（テスト用データ）</td><td>本番適用前</td></tr>
+<tr><td>AI-02（処理時間の超過）とPERF-02（NAS利用ツールへの影響）のNGを、区分A・Bのどちらとするかの基準</td><td>AI-02・PERF-02のNG時の扱い、切戻し判断に影響</td><td>中村氏・AI検査チーム・各工程担当</td><td>テスト実施前</td></tr>
+<tr><td>証跡の保存先</td><td>6章の結果記録（画面キャプチャ、ログ、コマンドの出力などの保存）に影響</td><td>中村氏・AI検査チーム</td><td>テスト実施前</td></tr>
+</tbody></table></div>
+
+<h2>付録A. 使用するコマンド</h2>
+<p>追加のパッケージを入れず、標準的なUbuntu（bash、curl、iproute2、util-linux）とdocker composeだけで実施できるコマンドに限定する。管理PCはWindows標準（PowerShell）を使用する。</p>
+<div class="table-wrap"><table><thead><tr><th>名称</th><th>内容</th><th>備考</th></tr></thead><tbody>
+<tr><td><code>tcpchk</code></td><td>TCPポートの到達確認。サーバーのシェルで次の関数を定義して使う。<br><code>tcpchk(){ SECONDS=0; timeout 5 bash -c "&lt;/dev/tcp/$1/$2" 2&gt;/dev/null; echo "$1:$2 rc=$? ${SECONDS}s"; }</code></td><td><code>rc=0</code>：接続成功／<code>rc=1</code>：接続拒否（宛先に到達し、ポートが閉じている）／<code>rc=124</code>：タイムアウト（FWによる遮断など）</td></tr>
+<tr><td><code>curl</code></td><td>HTTP(S)の到達確認。<code>curl -s -o /dev/null -w '%{http_code}\n' --max-time 5 URL</code></td><td><code>000</code>：接続できない（タイムアウト）</td></tr>
+<tr><td><code>docker compose</code></td><td>コンテナの確認。{composeディレクトリ} で実行する。</td><td><code>ps</code>、<code>exec</code> を使用</td></tr>
+<tr><td><code>ping</code>／<code>Test-NetConnection</code></td><td>疎通確認（サーバー／管理PC）</td><td>管理PCはWindows標準のPowerShell</td></tr>
+<tr><td><code>findmnt</code>／<code>ss</code>／<code>diff</code>／<code>sha256sum</code></td><td>mount、セッション、設定差分、ハッシュの確認</td><td>いずれもOS標準</td></tr>
+</tbody></table></div>
+
+
+<h2>付録B. テスト用パラメータ</h2>
+<div class="table-wrap"><table><thead><tr><th>記号</th><th>内容</th><th>現在の値・確認元</th></tr></thead><tbody>
+<tr><td>{管理PC旧IPアドレス}</td><td>変更前の管理PC（AI検査指示）</td><td>#31 JP2500094：10.7.13.167（9号館）／#32 JP2401252：10.7.30.154（10号館）／#33 JP2402342：10.7.27.30（11号館）／#34 JP2200608：10.7.1.189（12号館）。Assy管理PC（#1031～）は未確認</td></tr>
+<tr><td>{管理PC新IPアドレス}</td><td>変更後（工場ネットワーク側）の管理PC。各工程で検査指示アプリ（insp_app／op_app）が動作するPCを対象とする</td><td>未確定。アプリはACT系・Assy系それぞれ同一PC上で動作している想定だが、別のPCから使っている可能性もある</td></tr>
+<tr><td>{NAS旧IPアドレス}</td><td>変更前の工程NAS</td><td>ACT／ACT-BE：#21 10.8.68.93、#22 10.8.68.127／Assy：#1021 10.8.64.12、#1022 10.8.64.14、#1023 10.8.64.16、#1024 10.8.64.187、#1025 10.8.64.189、#1026 10.8.64.191、#1027 10.8.64.205、#1028 10.8.64.223</td></tr>
+<tr><td>{NAS新IPアドレス}</td><td>変更後（工場ネットワーク側）の工程NAS</td><td>未確定</td></tr>
+<tr><td>{AI検査サーバーIPアドレス}</td><td>AI検査サーバー（変更なし）</td><td>#51 hrob2aisc1：10.8.88.77／#52 hrob2aisc2：10.8.88.78／#53 hrob2aisc3：10.8.88.79／#54 hrob2aisc4：10.8.88.80</td></tr>
+<tr><td>{データ収集サーバーIPアドレス}</td><td>データ収集サーバー（変更なし）</td><td>#61 hrob2aidc1：10.8.88.76</td></tr>
+<tr><td>{iLOアドレス}</td><td>各サーバーのiLO</td><td>#61：10.8.90.62／#51～#54：10.8.90.63～10.8.90.66</td></tr>
+<tr><td>{基幹側確認元端末IPアドレス}</td><td>基幹ネットワーク側の確認用端末</td><td>未確定</td></tr>
+<tr><td>{許可範囲内テスト端末IPアドレス}、{許可範囲外テスト端末IPアドレス}</td><td>制御単位の確認に使う端末</td><td>未確定（FW設計書のIP範囲の確定後）</td></tr>
+<tr><td>{mountポイント}、{mount設定ファイル}、{mount設定バックアップ}</td><td>検査サーバーのホストOSのmount設定</td><td>未確認（現行のmount設定から確認）</td></tr>
+<tr><td>{composeディレクトリ}、{etcdサービス名}</td><td>docker composeのディレクトリ、etcdのサービス</td><td>未確認</td></tr>
+<tr><td>{etcdエンドポイント}、{etcd TLSオプション}</td><td>etcdクラスタの接続先、TLS接続に必要なオプション（--cacert、--cert、--key）</td><td>未確認</td></tr>
+<tr><td>{検査用ロットID}</td><td>工程別の検査用データ</td><td>未確定（各工程担当が準備）</td></tr>
+<tr><td>{切戻し手順書}</td><td>切戻しの手順（Firewall接続の解除、IP戻し、mount設定の復元、etcd・コンテナの再稼働）を定めた手順書。切戻し計画の作成で整備する</td><td>未確定</td></tr>
+<tr><td>{コンテナ起動・停止手順書}</td><td>コンテナの停止・起動（etcd、検査コンテナ・vis_conなどの順序を含む）の手順を定めた別途の手順書。テストの手順は、これに従う</td><td>未確認（手順書の所在と版を確認）</td></tr>
+<tr><td>{検査ログの場所}</td><td>各工程の検査ログの保存場所と確認方法</td><td>未確認</td></tr>
+<tr><td>{ビューワーアプリ}</td><td>検査結果を開くビューワーアプリ（起動方法・接続先）</td><td>未確認</td></tr>
+<tr><td>{vis_con URL}</td><td>可視化アプリの接続先</td><td>未確認</td></tr>
+<tr><td>{DNSサーバー}、{NTPサーバー}、{GitLabホスト}、{WSUSホスト}、{SMTPサーバー}</td><td>社内サーバー</td><td>用途は通信一覧にあり、ホスト名・IPは未確認</td></tr>
+<tr><td>{Windows Exporterのポート}</td><td>管理PCに導入するWindows Exporterの待受ポート</td><td>通信一覧では443（Windows Exporterの既定は9182）。管理PCへの導入は予定で、導入後に確認</td></tr>
+<tr><td>{プロキシサーバー}、{プロキシポート}</td><td>社外（インターネット）への通信を中継するプロキシサーバー。グローバルなホスト名は、プロキシ経由でしか名前解決できない可能性がある</td><td>サーバーにはHTTP_PROXY／HTTPS_PROXYが設定済み（値は未確認）</td></tr>
+<tr><td>{DocumentDBのIPアドレス}</td><td>DocumentDBのIP（名前解決できない場合に使用）</td><td>未確定</td></tr>
+<tr><td>{通知先メールアドレス}</td><td>Alertmanagerのテスト通知の宛先（CONN-08）</td><td>未確定</td></tr>
+<tr><td>{工程の通知先メールアドレス}</td><td>システム異常時にAI検査システムが通知メールを送る工程側のメールアドレス（工程別）</td><td>未確認</td></tr>
+<tr><td>{MON-01対象工程}、{検査失敗用テストデータ}</td><td>検査失敗の検知・通知を確認する工程と、その工程で検査を意図的に失敗させるテスト用データ（例：読み込めない画像を含むロット）</td><td>未確定（AI検査チームが準備）</td></tr>
+<tr><td>{検査失敗アラート名}、{アラート検知許容時間}</td><td>検査失敗時に発報するアラートの名前、検査失敗から通知メール到達までの許容時間</td><td>未確認（AI検査システムのアラート設定から確認）</td></tr>
+<tr><td>{S3バケット}、{DocumentDBエンドポイント}、{監視対象数}</td><td>AWS側の保存先、Prometheusの監視対象数</td><td>未確認</td></tr>
+<tr><td>{導入前処理時間}、{許容処理時間}、{許容遅延}、{許容劣化率}</td><td>性能の比較基準</td><td>導入前実績は未計測、許容値は未確定</td></tr>
+<tr><td>{先行着手工程}</td><td>3.2で先に検査を通しで実施する工程（ACT／ACT-BE、Assy N面、IR_CR、IR_NRのいずれか）</td><td>未確定</td></tr>
+<tr><td>{テスト完了期限}</td><td>3.1・3.2を完了させる時刻（期限までに完了できなければ切戻し）</td><td>未確定（切戻しに要する時間と停止期間を踏まえて決める）</td></tr>
+<tr><td>{許容復旧時間}</td><td>切戻し開始から復旧確認までの許容時間</td><td>未確定（停止期間の範囲内）</td></tr>
+<tr><td>{NAS利用ツール一覧}</td><td>検査以外でNASを使うツール・アプリ</td><td>未確認</td></tr>
+<tr><td>{FWログ確認先}</td><td>FWログの参照先</td><td>FW設計後に確定</td></tr>
+<tr><td>{工程用サブパス}、{テスト用ディレクトリ}</td><td>NAS上の各工程の共有パス、テスト用の書込み先</td><td>未確認（各工程担当が準備）</td></tr>
+</tbody></table></div>
+
+
+<h2>付録C. 通信マトリクス（試験対象）</h2>
+<p>FW設計書・通信マトリクスで確定した内容を試験前に反映し、許可通信と遮断通信をテスト番号へ紐付ける。制御はセグメント・IP範囲を基本とし、Port・Protocolは通信一覧に基づく参考情報とする。未確定の行は、実施前に確定する。</p>
+<div class="table-wrap"><table><thead><tr><th>マトリクス番号</th><th>送信元</th><th>宛先</th><th>Port（参考）</th><th>Protocol</th><th>許可／遮断</th><th>テスト番号</th></tr></thead><tbody>
+<tr><td>M-01</td><td>AI検査サーバー、データ収集サーバー、管理PC</td><td>工程NAS（新IP）</td><td>445</td><td>TCP／SMB</td><td>許可</td><td>CONN-01、CONN-03、CONN-06、CONN-09、PERF-02</td></tr>
+<tr><td>M-02</td><td>etcdクライアント（管理PCを含む）</td><td>etcdクラスタ</td><td>2379</td><td>TCP</td><td>許可</td><td>AI-01、CONN-07</td></tr>
+<tr><td>M-03</td><td>etcdノード</td><td>etcdノード</td><td>2380</td><td>TCP</td><td>許可</td><td>CONN-07</td></tr>
+<tr><td>M-04</td><td>Promtail</td><td>Loki</td><td>3100</td><td>HTTP</td><td>許可</td><td>CONN-08</td></tr>
+<tr><td>M-05</td><td>データ収集サーバー</td><td>AI検査サーバー（node_exporter）</td><td>9100</td><td>HTTP</td><td>許可</td><td>CONN-08</td></tr>
+<tr><td>M-06</td><td>管理PC</td><td>AI検査サーバー、データ収集サーバー</td><td>443</td><td>HTTPS</td><td>許可</td><td>AI-01、AI-04</td></tr>
+<tr><td>M-07</td><td>管理PC</td><td>データ収集サーバー（Grafana）</td><td>3000</td><td>HTTP</td><td>許可</td><td>CONN-05、CONN-08</td></tr>
+<tr><td>M-08</td><td>管理PC（工場側）</td><td>AI検査サーバー、データ収集サーバー</td><td>22</td><td>SSH</td><td>許可</td><td>CONN-03</td></tr>
+<tr><td>M-09</td><td>基幹側端末</td><td>iLO（基幹ネットワークに残す）</td><td>80／443</td><td>HTTP／HTTPS</td><td>許可</td><td>CONN-04</td></tr>
+<tr><td>M-10</td><td>データ収集サーバー</td><td>社内SMTPサーバー</td><td>25</td><td>SMTP</td><td>許可</td><td>CONN-02、CONN-08、MON-01</td></tr>
+<tr><td>M-11</td><td>各サーバー</td><td>社内DNS／NTP</td><td>53／123</td><td>UDP</td><td>許可</td><td>CONN-02</td></tr>
+<tr><td>M-12</td><td>各サーバー</td><td>社内GitLab／WSUS</td><td>443（WSUSは80も）</td><td>HTTPS</td><td>許可</td><td>CONN-02</td></tr>
+<tr><td>M-13</td><td>データ収集サーバー</td><td>AWS（S3はプロキシ経由の可能性あり／DocumentDB）</td><td>443／27017</td><td>HTTPS／TLS</td><td>許可</td><td>CONN-02</td></tr>
+<tr><td>M-14</td><td>各サーバー</td><td>プロキシサーバー（社外通信の中継）</td><td>{プロキシポート}</td><td>HTTP（プロキシ）</td><td>許可</td><td>CONN-02</td></tr>
+<tr><td>M-15</td><td>データ収集サーバー</td><td>管理PC（Windows Exporter）</td><td>{Windows Exporterのポート}（通信一覧では443）</td><td>HTTPS</td><td>許可</td><td>CONN-01</td></tr>
+<tr><td>M-16</td><td>許可範囲外の送信元</td><td>保護対象機器</td><td>—</td><td>TCP／UDP</td><td>遮断</td><td>CTRL-01、CTRL-02</td></tr>
+<tr><td>M-17</td><td>基幹側端末</td><td>データ収集サーバー（Grafana）</td><td>3000</td><td>HTTP</td><td>遮断（将来はDMZ経由）</td><td>CTRL-02</td></tr>
+<tr><td>M-18</td><td>基幹側端末</td><td>AI検査サーバー、データ収集サーバー</td><td>22</td><td>SSH</td><td>遮断</td><td>CTRL-02</td></tr>
+<tr><td>M-19</td><td>工場ネットワーク側の許可対象外機器</td><td>AI検査サーバー・管理対象機器</td><td>—</td><td>TCP／UDP</td><td>遮断</td><td>CTRL-02</td></tr>
+</tbody></table></div>
+<p class="small">本表は試験用の対応表であり、最終的な許可・遮断、IP、ポート、プロトコルは承認済みのFW設計書・通信マトリクスを正とする。</p>
+
+</main>
+</body>
+</html>
